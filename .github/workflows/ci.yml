@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: "Tests (node ${{ matrix.node }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is what deploy.yml pins; 22 is what it gets developed on. The pair
+        # catches an accidental dependency on a newer built-in, which would
+        # otherwise only surface at release time.
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # No install step and nothing to build: the suites load every script the
+      # page loads, verbatim, into a VM context with a minimal document.
+      - name: Run the tests
+        run: node tests/all.mjs
+
+  generated:
+    name: Generated files up to date
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # data/images.js and sw.js's MEDIA list are written from the contents of
+      # images/. The test suite already checks they MATCH disk; this checks they
+      # are also what the generator would produce, and says what to run.
+      - name: Regenerate
+        run: node tools/gen-images.mjs
+      # Scoped to the two files the generator writes: an unrelated uncommitted
+      # change must not fail this, and the message has to name the right fix.
+      - name: Check nothing drifted
+        run: |
+          git diff --compact-summary --exit-code -- data/images.js sw.js || \
+            (echo; echo "data/images.js or sw.js is out of date with images/."; \
+             echo "Run 'node tools/gen-images.mjs' and commit the result."; exit 1)

@@ -1,0 +1,876 @@
+# Workout — rings & bodyweight
+
+A local-first, no-build web app for a home program built around Olympic rings, push-up bars and a
+10 kg adjustable weighted vest — plus two chairs that were already in the room. **Two or three
+sessions a week, alternating A and B, no fixed days.**
+
+It holds the program, tells you what to do next, times the rests and the holds, logs the sets, and
+works out what the next session's numbers should be — so there is nothing to decide mid-workout
+and nothing to remember between sessions. All state lives in the browser: no backend, no accounts,
+no build step.
+
+**Everything you need on day one: the rings and the push-up bars.** The 20 cm sofa chair first
+appears around week 5, the 45 cm chair around week 7, and the vest around week 8.
+
+## Run
+
+Open [index.html](index.html) in a browser. That is it.
+
+On a phone, **add it to the home screen**: it is an installable web app, so it launches fullscreen
+with no browser chrome, its own icon and the dark theme carried into the status bar. The layout is
+mobile-first and tap targets are 44 px.
+
+**Opening `index.html` directly from disk works**, but it is the weaker mode: `file://` has no
+service worker (so nothing is cached and there is no offline guarantee), the manifest is blocked,
+and it cannot be installed to a home screen. Illustrations do render — `crossorigin` is dropped on
+`file://`, because a CORS request there is rejected outright and would otherwise kill every image,
+local ones included. Serve over https for the real thing.
+
+**It works with no connection.** A service worker caches the app shell, so it opens instantly and
+runs offline — useful when the wifi drops mid-session. Your training data was never online anyway;
+it lives in localStorage, which the cache never touches.
+
+**Illustrations are precached in the background** once the worker activates, rather than on first
+view. Caching them lazily meant any exercise whose ⓘ panel you had never opened had no picture
+offline — patchy in a way that looked like a bug because it was one. They stay out of the install
+list so 2.4 MB never delays startup.
+
+The offline fallback is **limited to navigations**. It used to hand `index.html` to anything that
+failed, so an uncached image received HTML with a 200, failed to decode, and vanished silently —
+indistinguishable from a missing file. Non-navigations now get a 504.
+
+The worker is deliberately **network-first with a cache fallback**, not cache-first: six small files
+cost nothing to re-fetch, and it means an edit shows up on the next reload instead of the one after.
+It also bypasses the browser's own HTTP cache on the network leg — without that, a host which sends
+no `Cache-Control` (`python -m http.server`, and plenty of static hosts) lets the browser apply
+heuristic freshness and serve stale bytes to the worker, which defeats the whole point. Bump
+`VERSION` in [sw.js](sw.js) to force every client to discard its cache.
+
+**The screen is kept awake for the length of a session**, via the Screen Wake Lock API. Two things
+are worth knowing, and the **Data** tab shows the live status so you never have to guess:
+
+- **It needs a secure context.** `https`, `localhost` and `file://` all work. Plain `http://` to a
+  LAN address does **not** — the API is simply absent there and the screen will sleep. So serve it
+  over https (GitHub Pages is enough) or copy the files onto the phone and open them directly.
+- **The spec drops the lock whenever the page is hidden and never restores it.** Switch apps to
+  change the music, take a call, and the screen would start sleeping again on your return. The app
+  therefore re-claims it on every return to visibility, and again after a reload if a session was
+  left running.
+
+## Using it
+
+Everything below exists to answer one question without you having to think about it: **what do I do
+next?** One card is marked `NOW`, every wait is written down where it happens, and the app says out
+loud what is coming so you can leave the phone on the floor.
+
+Three clocks run:
+
+- **Rest timer** — starts automatically when you log a set, using that exercise's own interval.
+  Pinned to the bottom of the screen, beeps and vibrates at zero, with `+30s` and skip. It names
+  what is coming, distinguishing the next set from the next exercise (`Next: Push-ups`).
+
+  **Supersets are run by round, not by exercise.** Log the first half and it says *"Ring face pulls
+  now"* with no timer at all; log the second and the rest starts, pointing you back at the first for
+  round two — `A1 B1 rest A2 B2 rest`. Resting between the halves would defeat the reason for
+  pairing them, and it is where the session's time saving comes from.
+- **Hold timer** — for the timed exercises (movement prep, dead hang, ring fallouts) the tick button
+  becomes **Start**. It first counts you in — five seconds by default, adjustable in Data — because
+  when you tap Start you are not in the rings yet, and those seconds would otherwise be logged as
+  part of the hold. Beeps on the last three, then a higher tone and "Go". Cancelling during the
+  countdown logs nothing at all.
+
+  Then it counts *up*, calls the seconds out as they pass, beeps at the target, and logs whatever
+  you actually held. Counting up is deliberate: fail a plank at 22 s against a 30 s target and it
+  must record 22, not 30 — and holding 35 s earns the overshoot credit the progression engine gives
+  for beating a range.
+- **Session elapsed** — in the header, and stored so History shows how long each session really took.
+
+A hold survives closing the tab, logs itself if you start another one, and logs itself if you hit
+Finish while it is still running.
+
+### What is on a card
+
+A card answers three questions and nothing else, because everything on screen during a session
+competes with the set you are about to do:
+
+| | Element |
+|---|---|
+| **What to do** | `3 × 6 reps · +2 kg` |
+| **Which variation** | `LEVEL 1/4 · Feet on floor, heavy assist` |
+| **What to fetch** | equipment chips |
+
+The variation is not supplementary detail — `Push-ups · 3 × 10` is an incomplete instruction when
+level 1 is knees-down and level 4 is feet on a 45 cm chair. The `1/4` doubles as the only progress
+indicator on the card. Exercises with a single-level ladder show no level line at all.
+
+Three things earn an exception: the `PREP` tag, a `⇄ Ring rows` tag when an exercise is supersetted
+(it changes how you run the session, not just how you perform the movement), and the one-line
+caution on ring dips.
+
+Everything else — form cues, the note for the current level, the superset rationale, the full
+ladder, rest, range and the demo link — lives behind the ⓘ. Cues in particular were the bulk of the
+clutter: useful for the first two sessions, noise for the next fifty.
+
+**The cues are the level's, not the exercise's.** A pistol squat and a bodyweight squat share the
+split-squat ladder and nothing else, so "front shin roughly vertical" is the wrong instruction for
+one of them. The ladder in the ⓘ badges which rungs re-coach the movement, are done per side, or
+carry their own rep range.
+
+Each card lists the **kit it needs at the level you are currently on** — `push-up bars`,
+`chair 45 cm`, `vest 2 kg`, or `no equipment`. Not a fixed per-exercise list, because that would be
+wrong most of the time: push-ups start on the bars, pick up the sofa chair at level 3, the 45 cm
+chair at level 4, and end up in the rings at level 5. A level's own kit replaces the exercise
+default rather than adding to it, so level 5 does not still claim you need the bars. Tests assert
+every token has a UI label and that the push-up hand-off is exactly that sequence.
+
+One exercise — **ring dips** — carries an amber stripe down the left of its card. It is the
+highest-risk movement in the program after a long layoff, and depth is what hurts shoulders, so the
+card states the depth cap in amber rather than leaving the stripe to mean something unexplained. A
+test asserts the stripe and the caution text can never exist without each other, because a coloured
+bar with no legend is noise and a caution with no stripe goes unread.
+
+Supersets **name their partner on the card** — "⇄ Alternate sets with Ring face pulls — one rest
+covers both". This went through two wrong versions first: a bare `superset` tag made four
+consecutive cards look like one four-way group, and `A1/A2, B1/B2` fixed the grouping but needed a
+legend and hid the partner in a tooltip, which does not exist on a phone. Plain words need neither.
+
+Each station renders as a section heading rather than another panel — the exercise cards already
+carry borders, so grouping is done with type and space instead of nesting boxes. It carries a
+`2 / 4` counter, and the stations needing a ring adjustment are picked out in blue, since those are
+the only points in a session where you touch the hardware.
+
+### Where you are
+
+One card is marked **now** — a green edge, a `NOW` chip, and the one set to do
+picked out inside it. When the exercise changes the page brings that card into view;
+it does not move for every logged set, which would yank the page around under your thumb.
+
+Which card that is comes from the same timeline walk the rest timer uses, so the highlighted
+card is always the one the voice just announced. It looks **forward from the last set you
+logged, then wraps** — skip the warm-up and the marker moves on with you rather than sitting
+on it, but the skipped set is still reachable at the end. Undo is the one exception: reopening
+a set puts you back on that set, because that is what undo means.
+
+### Every wait is a step
+
+Rest is most of a session — 150 s between sets of pull-ups against about 18 s of actual pulling.
+It used to exist only as a bar at the bottom of the screen, and only once a set had been logged,
+so the page read as if the sets ran back to back and there was no way to see how long the next
+wait was until it had already started.
+
+Now the waits sit in the sequence, between the set rows and between the cards:
+
+```
+1   6 reps                            undo
+┃ 2:29   resting · set 2 next        [Skip]
+2   −   6 reps   +                       ✓
+    ⏱ Rest 150 s
+3   −   6 reps   +                       ✓
+
+⏱ Rest 150 s   before Hanging leg raises
+```
+
+The one that is running shows the same clock as the bar. A superset says what actually happens —
+`⇄ Ring face pulls, then rest 90 s` — because the wait comes after the partner, not after this
+set, and "rest 90 s" there would have you standing still through half the round. Tapping a wait
+that has not started yet starts it.
+
+### Holds are counted out loud
+
+A hold is the only thing in the program with no reps to count, and you cannot look at a phone
+while hanging off the rings. So the seconds get called out as they pass — `"10" … "20 seconds"
+… "30"` — and it keeps going past the target until you stop it, because the clock counts up
+rather than down and going long is a good thing.
+
+The target itself keeps its own beep and its own announcement, so the same number is never said
+twice a beat apart. The interval is a setting (**Count out a hold**, default every 10 s, can be
+switched off). It needs a voice; in beep-only mode the marks are silent.
+
+The marks are announced on the *mark*, not on an exact second — a backgrounded tab throttles the
+timer, and matching `seconds % 10 === 0` would drop a call whenever a tick was skipped.
+
+### Cutting a set when time is short
+
+Tapping the minus past its floor on a prescribed set drops it: the row stays — the fact that
+there was meant to be a third set is worth keeping — but it reads *not doing this one* and
+everything downstream treats it as though it was never prescribed. No time in the estimate, no
+wait drawn before it, no place in the running order, and **not scored as a miss**. Plus puts it
+straight back.
+
+That last part is the one that matters: cutting a set because you are short of time must not
+deload you for being busy. Simply leaving a set unlogged is still a miss, because that is a
+different thing from deciding in advance not to do it.
+
+The floor is the same `minSets` the time-cap trimmer respects — cutting a main lift to a single
+set is a different session, not a shorter one, so the minus stops rather than going to zero.
+
+Two ways to shorten a session, then: **Time today** picks the sets for you by importance, and
+this picks them by hand.
+
+### When something breaks
+
+Nothing here should ever fire, but the alternative failure mode is a blank or frozen page with
+the reason in a console nobody opens on a phone — at which point there is no way to tell a
+rendering bug from lost training data.
+
+`render()`, the tap handler and the one-second timer are each wrapped, with `window.onerror`
+behind them. A failure shows a banner naming what broke, states that every logged set is
+already in localStorage, and offers **Reload**, **Download a backup** and **Dismiss**. The rest
+of the page keeps working — the rest timer carries on counting.
+
+The banner's own buttons are bound directly rather than through the delegated click handler,
+because that handler is one of the things that might be broken.
+
+### Sound
+
+Three modes in the **Data** tab: *speak*, *beep only*, or *silent*. The beep is a synthesised
+880 Hz tone — no audio file, so it works offline everywhere. Speaking uses the Web Speech API and
+the device's own voices, picking an English one explicitly rather than the system default, because
+on a phone set to another language the default voice reads the exercise names with the wrong
+phonetics.
+
+A **🔊 button sits in the header on every tab** — one tap plays the beep and the spoken sample, and
+a toast reports what actually happened ("Beeped, then *Ring dips, set two*", or "Beeped — no voice
+available in this browser"). It is there because sound is the one thing you cannot verify by
+looking, and because Bluetooth output needs waking before it behaves.
+
+A **Voice** picker appears in settings listing the English voices your device exposes, and selecting
+one speaks a sample immediately. The 🔊 test names the voice actually in use, so "which voice is
+this?" is answerable rather than a guess.
+
+The chosen voice is resolved at *speak* time, not just at startup. Firefox frequently has voices
+ready before the page asks and then never fires `voiceschanged`, so a startup-only lookup silently
+stays null — and with no voice set, speech-dispatcher falls back to its own module default, which
+for RHVoice is `Elena+CLB`, a female voice. That was a real bug, and it looked exactly like a
+configuration problem. Left on *Automatic* it deliberately avoids **espeak** if anything
+else is present — espeak is a formant synthesiser from the 1990s and sounds like one, and on Linux
+it is usually first in the list, so without that rule installing a better engine would change
+nothing.
+
+On Linux, better engines are one `apt install` away — see [Better speech on Linux](#better-speech-on-linux).
+
+**Speech does not work in every browser, and the app says so instead of failing silently.** The
+settings panel checks `getVoices()` and warns in red when the list is empty, and the Test button
+reports what actually played. Known state:
+
+| Platform | Beep | Speech |
+|---|---|---|
+| Android / iOS | ✅ | ✅ out of the box |
+| Firefox on Linux | ✅ | ✅ via speech-dispatcher |
+| **Chrome on Linux** | ✅ | ❌ Chrome does not bridge the Web Speech API to speech-dispatcher, so `getVoices()` is empty even with it installed |
+
+Speech mode always beeps first, so on Chrome/Linux it degrades to exactly the beep-only behaviour
+rather than going quiet.
+
+What it says:
+
+| When | Says |
+|---|---|
+| Session start | *"Workout A. Rings overhead"* |
+| 10 s left of a rest over 25 s | *"Ten seconds"* |
+| Rest ends | *"Ring dips, set 2"* — the exercise and which set is next |
+| Mid-superset, no rest due | *"Ring face pulls now"* |
+| Hold count-in | *"Get ready"*, then *"Go"* |
+| Every 10 s of a hold | *"10"*, *"20"*, *"30"* … past the target until you stop |
+| Hold target reached | *"Twenty seconds"* |
+
+The beep still fires first in speak mode: the tone gets your attention, the words tell you what.
+That matters most on the rings, where your hands are busy and the phone is on the floor.
+
+**Bluetooth wake-up.** A Bluetooth link idles between sounds and eats the first few hundred
+milliseconds when it wakes — the first beep of a set vanishes and "Ring dips" arrives as "ing dips".
+Every cue is therefore preceded by an **inaudible 120 Hz tone** that wakes the output, with the real
+sound scheduled behind it, giving one continuous signal and no gap to fall asleep in:
+
+```
+120 Hz primer (inaudible)  |----------------------|   0 -> 660 ms
+880 Hz beep                            |----------|   600 -> 960 ms
+speech                                              ^  1010 ms
+```
+
+How much lead-in is a setting (**Data → Bluetooth wake-up**, default 600 ms), because hardware
+varies enormously — raise it if the first word is still cut, drop it to zero on wired or built-in
+speakers. The delay applies even when the primer is skipped, so a run of cues stays evenly spaced.
+
+**Speech queues behind the beep.** Speech goes through the platform rather than the AudioContext,
+so it cannot be scheduled on a timeline — it is held back until the warm-up *and* any scheduled tone
+have finished, otherwise the tone and the words play over each other.
+
+Diagnosing this is worth recording, because three plausible culprits were all innocent: RHVoice
+rendered a complete 1.50 s file, the audio reaching the sink matched it envelope-for-envelope, and
+raising `AudioPulseMinLength` changed nothing. Playing the same phrase twice back to back — first
+clipped, second complete — is what identified the device rather than the software.
+
+### Better speech on Linux
+
+Firefox routes the Web Speech API through **speech-dispatcher**, which defaults to espeak-ng. It is
+intelligible but robotic. Two upgrades, both packaged:
+
+```sh
+# Easiest — the espeak-ng-mbrola module is already installed, so this needs no config.
+# Diphone concatenation of recorded speech instead of pure formant synthesis.
+sudo apt install mbrola mbrola-us1
+
+# Better still — RHVoice, noticeably more natural.
+sudo apt install rhvoice rhvoice-english speech-dispatcher-rhvoice
+```
+
+Restart Firefox afterwards, then pick the new voice in the app's **Voice** dropdown. Check what
+speech-dispatcher can see with `spd-say -L`, and test a voice directly with
+`spd-say -o rhvoice "ring dips, set two"`.
+
+None of this affects the phone, where the built-in voices are already good — and the phone is where
+the app is meant to live.
+
+### "Show me how"
+
+The ⓘ panel on every exercise — on the Today tab and in the Program tab's reference — opens with a
+**Show me how** link to a YouTube search, and shows the query it will run.
+
+Two deliberate choices:
+
+- **A search, not a video id.** A specific video can be deleted or made private and the link dies
+  silently; a search URL never rots. It also lets you pick a demo you like rather than mine.
+- **The query uses the name the movement is commonly known by, not the name this program uses.**
+  Searching "ring leg curl" finds very little; **"TRX hamstring curl"** finds dozens of good demos
+  of the identical movement. Same for ring fallouts, which the world calls **"TRX fallout"**. A test
+  asserts the leg curl in particular keeps its common-name query, since that is the one where the
+  difference matters most.
+
+### Illustrations
+
+Twelve of the sixteen exercises carry an illustration in the ⓘ panel — ten animated 360×360 GIFs
+and two stills, all **© [Gym visual](https://gymvisual.com/)**, credited beneath each one. Three of
+them (ring dips, ring rows, ring fallouts) are performed **on rings**; the rest substitute a bar or
+a cable, where the action is identical and recognition is the point.
+
+They are **hotlinked** from two personal forks rather than committed, and the service worker caches
+them **cache-first** — so each is fetched from GitHub exactly once, then served locally forever and
+works offline. That matters because `raw.githubusercontent.com` is rate-limited at ~60 requests an
+hour and is not a CDN. The `<img>` needs `crossorigin="anonymous"` for this: without it the response
+is *opaque* (`status 0`, `ok false`) and the worker silently declines to cache it.
+
+Five more are stored locally rather than hotlinked: two (**ring leg curl**, **pike push-up**)
+because their source sends no CORS header, which would either block the image or make it
+uncacheable, and three (**ring face pull**, **ring pull-ups**, **dead hang**) because they replaced
+approximations — a cable machine and two fixed bars — with the movement performed on straps and
+rings. 468 KB for the five, all resampled from clips ten times that size.
+
+**Every exercise and every ladder level is illustrated except one**, and the levels that differ
+enough to be separate exercises carry their own picture rather than sharing one that only matches a
+rung you are not on — split squats has five, hip thrusts four. Only `movement-prep` shows the video link alone, and it
+should: it is four separate things (getting warm, arm circles, good mornings, wrist rocks) and no
+single frame represents that.
+
+The Gym Visual credit is decided by the picture rather than the exercise, because levels of one
+exercise now draw from different sources — hip thrust level 2 is Gym Visual, levels 1 and 3 are not.
+[free-exercise-db](https://github.com/yuhonas/free-exercise-db) was checked first and was far worse:
+public domain, but gym-machine oriented, with exactly **one** genuine match across 873 entries.
+
+Illustrations can be attached **per ladder level**, not just per exercise, because a floor glute
+bridge and a single-leg hip thrust off a chair are not variations of one movement — they are
+different exercises sharing a progression. A level that names its own picture wins outright; one
+that does not falls back to `images/<id>-L<n>.gif`, then to the exercise's own file.
+
+Which of those exist is **generated**, not guessed. `data/images.js` is written from the contents of
+`images/` by `node tools/gen-images.mjs`, so the resolver skips straight to the file that is
+actually there. Without it the browser had to *ask* for each candidate in turn — four 404s per
+exercise, eighteen for a pass over one session — and an exercise with no picture at all still
+rendered an `<img>` that fetched four files before deleting itself. A test fails if the generated
+list drifts from disk. See [images/README.md](images/README.md).
+
+## The constraint that shapes everything
+
+The pull-up and dip bars are in an awkward spot, so they are out. The rings replace both, but
+only at **fixed heights**, because re-rigging mid-session is the friction that kills a home
+program:
+
+| Station | Height | Exercises |
+|---|---|---|
+| Rings overhead | Dead hang | Movement prep, dead hang, scap pulls, pull-ups, chin-ups, hanging leg raises |
+| Rings at chest | Sternum | Split squats, face pulls, ring rows, ring dips, ring fallouts |
+| Rings on the floor | 20-25 cm | Ring leg curls *(day B only)* |
+| Floor | — | Push-ups on bars, pike push-ups, hip thrusts, calf raises |
+
+Sessions render in that order, which is also the order the rings physically travel — **downward
+only, never back up**. Day A needs two adjustments, day B three. Both asserted by tests.
+
+**The warm-up is one block, bookended.** It used to be split in half: a "Warm-up" station holding
+movement prep, then the dead hang and scap pulls stranded inside "Rings overhead" — which reads as
+the warm-up having ended when it had not. Movement prep needs no equipment, so it had no business
+owning a station; it now sits at the top of the rings station with the rest of the prep. Day A is
+three stations instead of four.
+
+The block is marked at both ends — a **Warm-up** divider above it, a **Working sets** divider below
+— and every exercise inside gets a `PREP` tag and a dashed border. One opening marker matters more
+than it sounds: without it you can see where the warm-up ends but not that it ever began.
+
+Prep is decided by **position, not purpose**. Ring face pulls exist for shoulder health, but they
+are two real working sets in the middle of the session, so they are not marked as prep. Only what
+comes before the divider is.
+
+Two of those heights are set by a functional test rather than a number:
+
+- **Overhead** is set once and never touched. Hang the rings so your toes just brush the floor with
+  the legs **straight**, and that single height does both jobs: straighten the legs to take weight
+  through them while you still need assistance, bend the knees and cross the ankles for a clean full
+  hang once you do not. Feet clear the floor either way under bent knees, so it is a true hang under
+  full bodyweight — no chair, no band, no adjusting.
+
+  The only thing it costs is the bottom of a **straight-leg** hanging leg raise, which is cut short.
+  That is irrelevant at levels 1-2; raise the rings for that exercise alone if it starts to matter.
+- **Chest** is whatever passes the dip check: drop to sternum, then confirm that at the *bottom* of
+  a dip, knees bent, your feet still clear the floor.
+
+Because the rings never move *to add difficulty*, every exercise instead carries a **ladder** —
+an ordered list of difficulty **levels**, each a harder body position than the last: feet walked
+further forward, feet on a box, less assistance from the legs. Climbing one level is how an exercise gets
+harder; the vest only comes in once the top level is reached.
+
+## The split
+
+Alternating A and B, **2-3 sessions a week, at least a day apart** — no fixed days. Legs are split
+by pattern rather than repeated, so each session stays under an hour and neither leg pattern is
+trained on consecutive days:
+
+| | Workout A — pull emphasis | Workout B — push emphasis |
+|---|---|---|
+| Vertical | Ring pull-ups 3×6-8 | Ring chin-ups 3×6-8 |
+| Horizontal pull | Ring rows 3×10-12 | Ring rows 3×10-12 *(one level harder)* |
+| Push | Ring dips 3×6-8, push-ups 2×10-12 | Ring dips 3×6-8, push-ups 3×10-12 |
+| Vertical push | — | Pike push-ups 3×6-10 |
+| Core | Hanging leg raises 3×8-10 | Ring fallouts 3×20-30 s |
+| **Legs** | **Knee** — split squats 3×10-15, calf raises 2×12-20 | **Hip** — ring leg curls 3×8-12, hip thrusts 3×10-15 |
+| Warm-up | Movement prep 3 min, dead hang, scap pulls | Movement prep 3 min, dead hang, scap pulls |
+| Prehab | Ring face pulls 2×12-20 | — |
+
+**A and B alternate automatically** — the app offers whichever you did not do last, starting with A.
+An **A / B** picker sits under the session title for the times that is wrong: repeating a session you
+cut short, restarting on A after a break, or skipping the day whose equipment you cannot reach. It
+is a one-off, not a setting — it disappears once a session is running, and alternation resumes from
+whatever you actually complete rather than from what you picked.
+
+24 and 27 sets, estimated at **~49 and ~57 minutes** at the start of Phase 1 — the app computes
+this from your actual prescriptions. Use the **Time today** control to cap it; 40 minutes trims a
+handful of sets off the least important exercises. Push-ups drop to two sets on the pull day — the chest already took three sets of dips — and the
+warm-up runs one set of each. That is where the time for legs came from.
+
+### Session length
+
+A **Time today** control on the Today tab caps the session at 30, 40 or 50 minutes, or runs it in
+full. It is a per-session choice you can change on the spot, and it persists.
+
+The estimate is arithmetic: work + a rest after every round + a transition per exercise + one ring
+adjustment each. Rest dominates, which is why supersets matter — members of a group share one rest
+per round instead of taking one each, so pairing two 3-set exercises saves three rests outright.
+Real sessions run 10-15% longer than the number shown; nothing accounts for filling a water bottle.
+
+Trimming shaves **one set at a time off the least important exercise still above its floor**, so
+cuts get spread rather than gutting one movement. Every exercise carries a `trimPriority` (calves
+and face pulls go first, the main lifts last) and a `minSets` floor (2 for anything that matters,
+1 for accessories). The warm-up is `fixed` and is never touched. If the cap cannot be met even with
+everything on its floor, the app says so rather than pretending.
+
+Lowering the cap mid-session drops trailing sets you have not logged yet — never a logged one, and
+never one you added by hand with **+ extra set**. Those carry an `extra` flag precisely so the
+trimmer leaves them alone; `droppableSets()` in the engine holds that rule and is covered by tests.
+
+The minus button doubles as the way to take a set back off. Held down to its floor, one more tap
+**removes** an extra set you added, or **cuts** a prescribed one — the button shows ✕ instead of −
+when that is what the next tap will do. See below.
+
+### The warm-up
+
+Every set in this program is a working set — there are no ramp-up sets built in — so the warm-up
+is the only thing between cold connective tissue and the first hard rep. After a five-year layoff
+that matters more than usual. It runs in two parts:
+
+1. **Movement prep**, 3 minutes, no equipment: two minutes getting warm, arm circles, 10 bodyweight
+   good mornings and 10 deep squats, wrist circles and rocking on the push-up bars. It covers the
+   things the rest of the session does not — body temperature, hips and hamstrings, wrists and
+   elbows. It is marked `progression: "fixed"`, so unlike everything else it never creeps longer.
+2. **Dead hang and scap pulls** on the rings at overhead height — shoulder-specific prep at a
+   station already set up, and the dead hang is literally the start position of the first working
+   set.
+
+The good mornings are not optional garnish: day B's first leg movement is the ring leg curl, which
+lands on the hamstrings cold and is the one exercise flagged for cramping.
+
+### No band
+
+Band pull-aparts became **ring scap pulls**, band face pulls became **ring face pulls** (better: no
+dead spot at the start, loaded continuously by body angle), and band-assisted pull-ups became a
+second **feet-assisted** level, since the overhead ring height is adjustable anyway. The one genuine
+loss is **shoulder rotation range**, which pass-throughs trained and a dead hang does not — the face
+pulls' external-rotation finish covers part of it. Keep a band in a drawer rather than binning it:
+if a shoulder starts complaining once the dips get heavy, it is the easiest rehab tool there is.
+
+Ordering follows the stations, with two exceptions carved out for fatigue and prehab: **split squats sit ahead
+of the row/dip pair on day A**, because pull-ups and hanging leg raises are both grip-limited and
+ring rows would have made three grip-taxing movements in a row. And **face pulls sit immediately
+before the dips**, putting rear-delt prep directly in front of the movement most likely to bother a
+shoulder. Tests assert both orderings.
+
+The **ring leg curl** is why day B pays for a third ring position. It trains knee flexion, which
+nothing else here touches and which is near-impossible to replicate without rings or a machine.
+Paired with the hip thrust for hip extension, the two cover most of what a barbell deadlift would.
+
+**Pike push-ups** are the vertical press. Bodyweight programs routinely omit this pattern entirely
+— nothing else in the program trains the shoulder overhead — and the ladder runs all the way to a
+handstand push-up, so it does not cap out.
+
+## Progression system
+
+The rules, in full. The app applies all of them automatically — there is nothing to remember or
+compute between sessions.
+
+1. **Climb the rep range.** Hit the target on *every* set → the target goes up by one step next
+   session (1 rep, or 5 s on timed work), up to the top of the range.
+2. **Hold the top.** Hit the top of the range on all sets for **2 consecutive sessions** → the
+   load goes up. Beat the top by **2+** and the wait is skipped entirely.
+3. **Ladder before vest.** A load increase first advances one level up the exercise's ladder.
+   Only when the ladder is topped out does the vest engage — **1 kg** for the first jump, then
+   **0.5 kg** at a time, capped at the vest's 10 kg.
+4. **Reset the reps.** Every load increase drops the target back to the bottom of the range.
+   This is what keeps the work inside the 6-12 hypertrophy window instead of drifting into
+   low-rep grinding.
+5. **Back off when stuck.** Miss the target **3 sessions in a row** → the load steps back down
+   (1 kg of vest, or one ladder level if there is no vest on) and the reps reset. Stalled at the
+   easiest level, it says so rather than inventing a negative level.
+6. **Phases gate the load.** A phase unlocks only when **both** the session count *and* the
+   calendar weeks are met. Load increases earned during Phase 1 are banked and applied the
+   moment Phase 2 opens, so nothing is lost by holding back early.
+
+Per-exercise state is five numbers — `{level, vest, target, topOutStreak, failStreak}` — and
+`evaluate()` is a pure function of `(exercise, state, logged sets, phase)`. That is the whole
+system; [progression.js](progression.js) holds no exercise-specific knowledge, and
+[data/program.js](data/program.js) holds no logic.
+
+### Two judgement calls worth knowing about
+
+**Load is judged on the opening set, not the lightest one.** Descending sets — open with the
+full vest for low reps, strip weight across the remaining sets — are an explicit technique in
+this program. Judging load on the minimum would score every descending-set session as a
+failure. Reps still have to be met on *every* set.
+
+**Carrying more than prescribed on every set moves the baseline up.** If you decide mid-session
+that 3 kg feels better than the prescribed 2 kg and still hit the reps, the app adopts 3 kg
+rather than making you re-earn it.
+
+### What happens when you don't hit the target
+
+Nothing is lowered. The target is held and you get the identical prescription next session —
+"repeat until you get it". Two details worth internalising:
+
+- **A miss is judged on your worst set.** Target 8 and you do 8/8/7 → that is a miss, and next
+  session is 3×8 again.
+- **Three consecutive misses trigger a deload**, and that is the only thing that breaks the
+  repeat loop: the load steps down and the reps reset to the bottom of the range.
+
+### How often, and why the app does not care
+
+Nothing keys off the calendar: phases unlock on **sessions completed and weeks elapsed**, never on
+weekdays, so training twice a week simply takes longer to clear a gate. That is the correct
+behaviour rather than a penalty.
+
+Two sessions a week lands around **11-12 hard sets per muscle group**, inside the range usually
+associated with growth, and takes ~80 min/week. Three gets you to ~16-18 sets and ~120 min. Weekly
+volume drives growth far more than frequency does, so three is faster only if it actually happens —
+and after a five-year layoff the extra recovery at twice a week is worth something on its own.
+
+### Phases
+
+| Phase | Unlocks at | RPE | Load progression |
+|---|---|---|---|
+| 1 · Reintroduction | start | 5-6 (3-4 RIR) | **Locked** — reps only, no vest, no harder variants |
+| 2 · Ramp-up | 9 sessions **and** 3 weeks | 7-8 (2-3 RIR) | On — ladder, then vest from 1 kg |
+| 3 · Full programming | 18 sessions **and** 6 weeks | 8-9 (1-2 RIR) | On — vest is the main driver |
+
+The both-conditions rule matters: after a five-year layoff, muscle comes back on the muscle-memory
+timeline but tendons and connective tissue come back on the calendar. Nine sessions crammed into
+ten days is not a completed reintroduction phase, and the gate refuses to treat it as one.
+
+Coming back from a break, force Phase 1 for a couple of weeks from the **Data** tab rather than
+picking up where you left off.
+
+## Three changes to the original plan
+
+**Ring plank → ring fallout.** The original called for a plank with the *feet in the rings at
+chest height*, which is not physically possible — feet in sternum-height rings puts you inverted.
+It is implemented as *hands* in the rings, feet walked back: the same anti-extension stimulus,
+progressed by walking the feet further back, and it loads the shoulders and lats as well.
+
+A feet-in-rings version is now physically available (the straps reach the floor), but the
+hands-in-rings version is kept: it sits at a height you are already standing at, and it progresses
+continuously by walking the feet back rather than in one huge jump.
+
+**No vertical press.** The original plan trained the shoulder overhead not at all, and neither did
+my first several revisions — I wrongly treated it as a gap only dumbbells could fill. **Pike
+push-ups** close it with equipment already owned, and the ladder runs to a handstand push-up.
+Credit where due: this came from a competing program spec, not from me.
+
+**No lower body.** The program as originally specified trained zero legs and zero hip hinge —
+a real gap for "get back into shape and build muscle". Legs are now a first-class part of both
+sessions, split by pattern as described above — split squats and calf raises on the pull day,
+ring leg curls and hip thrusts on the push day. Trimming push-ups to two sets on day A, and a
+one-set warm-up, is what paid for the time.
+
+## Would adjustable dumbbells still be worth buying?
+
+Short answer: **much less than before the leg block went in.** The original analysis said the
+money was worth spending because nothing loaded the hamstrings or the hip hinge. Hip thrusts and
+split squats close most of that, so the answer is now "optional, and not for a long time" — with
+one caveat below.
+
+| Movement pattern | Ring system | What dumbbells add |
+|---|---|---|
+| Vertical pull | Pull-ups / chin-ups + vest — **excellent** | Nothing. Dumbbells cannot do this at all. |
+| Vertical push | Ring dips + vest — **excellent** | Nothing comparable. |
+| Horizontal pull | Ring rows, 5 levels + vest — **good** | Smoother loading, single-arm work |
+| Horizontal push | Push-ups on bars, 5 levels + vest — **good** | Floor press, smoother loading |
+| Elbow flexion | Chin-ups — **fine** | Direct, smoother loading |
+| Shoulder rotation range | Dead hang + face pull finish — **partial** | Nothing; a band is the right tool |
+| Hip extension | Hip thrusts to single-leg + vest — **good** | Higher ceiling once the vest runs out |
+| Knee-dominant legs | Split squats → ring-assisted pistols + vest — **good** | Higher ceiling, easier to load precisely |
+| Knee flexion | Ring leg curls to single-leg — **excellent** | Nothing, without a machine |
+| Hinge | Covered indirectly by the thrust/curl pair | A loaded RDL — the clearest remaining gap |
+| Overhead press | Pike push-ups → handstand — **decent** | Easier to load, no balance demand |
+| **Lateral delts** | Bands only, weak | The whole pattern |
+
+The instinct is that the 10 kg vest is the binding constraint. It mostly is not. At roughly one
+load increase every 2-4 weeks per exercise and 0.5 kg steps, 10 kg of vest is around twenty
+increments — well over a year of progression, and that is *after* working through the ladders.
+
+What is left is **a properly loaded hinge and lateral delts.** Lateral delts are an accessory. The
+hinge is the real one: the leg curl and hip thrust cover the hamstrings at both joints, so what is
+missing is the *pattern*, not the muscle — but there is no way to load a hip hinge here.
+
+### When to buy, and what
+
+Train this for **3-6 months first.** The specific signals that it has been outgrown:
+
+- Weighted pull-ups with the full 10 kg vest feel comfortable
+- Split squats stop being genuinely hard even at the top ladder level with full vest
+- Leg progress stalls while the upper body keeps moving
+
+When those trigger, in priority order:
+
+1. **A pair of heavy adjustable dumbbells — 30 kg+ each, not a 24 kg starter set.** The number
+   matters. With no rack, the binding constraint is getting load to the shoulders unassisted, which
+   dumbbells solve because you can clean them up yourself. And 24 kg each caps out fast on split
+   squats and RDLs — you would be shopping again inside a year. This one purchase closes the hinge
+   and the lateral delts at once.
+2. **An adjustable bench.** Useful but not top-20%: rings already cover horizontal pushing well. It
+   earns its place mainly for heavy dumbbell pressing and as a better, safer hip-thrust platform
+   than a kitchen chair. Costs floor space, which is the binding constraint.
+3. **A kettlebell.** Largely redundant with heavy dumbbells for squats, presses and rows. Only
+   genuinely additive for ballistic work — swings, cleans — because of the offset handle. Worth it
+   if conditioning becomes a goal; skip it if the goal stays strength and hypertrophy.
+
+**An ab wheel is not on this list.** With the straps reaching the floor, kneeling in the rings and
+rolling out *is* an ab-wheel rollout, and it progresses more finely — a wheel jumps from knees to
+feet with nothing in between, while ring fallouts scale continuously by walking the feet back.
+
+## How it is built
+
+Vanilla JavaScript, no framework, no build step, no dependencies — including in the tests. Open
+`index.html` and it runs; the only tooling is `node` for the test suite and one script that
+regenerates a file list.
+
+The shape that has held up through every rewrite: **`data/program.js` holds no logic and
+`progression.js` holds no exercise knowledge.** The level model, the timeline, three storage
+migrations and per-level coaching have all gone through since, and the program data has needed only
+small local edits each time.
+
+### Files
+
+```
+index.html                    shell + tab structure
+manifest.json                 installable app metadata
+sw.js                         offline service worker
+icon.svg, icons/*.png         app icons (regenerate: rsvg-convert -w N icon.svg -o icons/icon-N.png)
+app.js                        UI, localStorage, session lifecycle, the timers
+progression.js                the engine — pure, testable, no DOM
+patch.js                      applies rendered HTML without destroying the DOM
+audio.js                      beeps, speech, and the rules about when they go out
+data/program.js               exercises, ladders, cues, phases, workouts A/B
+data/images.js                GENERATED — which illustrations exist locally
+styles.css                    mobile-first dark theme
+tools/gen-images.mjs          regenerates data/images.js and sw.js MEDIA
+tests/progression.test.mjs    the rules are right — 213 assertions
+tests/ui.test.mjs             the app applies them — 281, through real clicks
+tests/dom.test.mjs            the harness itself is honest — 102
+tests/audio.test.mjs          when a cue goes out and what it waits for — 54
+tests/patch.test.mjs          rendering keeps node identity — 30
+tests/dom.mjs                 a DOM small enough to test against, zero deps
+tests/harness.mjs             check/section/report, and the crash guard
+tests/all.mjs                 runs all five
+```
+
+### Testing
+
+Run them with `node tests/all.mjs`. No install step: every script `index.html` loads is run
+verbatim in a VM context against a minimal document, so there is no second copy of anything to
+drift — the test harness even reads its script list out of `index.html`, so a new file cannot be
+in the page and missing from the tests. A suite that dies part-way says which section it died in
+and how much never ran, rather than leaving a stack trace and no summary.
+
+The split matters. Every bug that ever reached a browser here was in the wiring, not the rules —
+a click handler that threw and froze a card, an image that could never load, a quote that closed
+an attribute early. `ui.test.mjs` drives the real app through the real markup and clicks real
+buttons; each of its cases is a bug that actually shipped.
+
+### Everything awkward takes its dependency as an argument
+
+Three things in this app are impossible to test if they reach out to the world directly, so
+none of them do:
+
+- **The clock.** `app.js` never calls `Date.now()`; it goes through one `now()` that reads
+  `window.CLOCK` when a test provides one. That is the only reason the hold timer, the
+  countdown, the rest bar and phase rollover have any coverage — you cannot assert on a
+  countdown you have to sit and wait for.
+- **The speaker.** `audio.js` takes a device with `tone()` and `speak()`. In a browser that is
+  WebAudio and the Web Speech API; in a test it writes down what it was asked to do. The
+  Bluetooth priming window, the queueing of speech behind a scheduled tone, and the
+  voice-at-speak-time rule were the most-debugged code in the project and had one assertion
+  between them until this split.
+- **The document.** `tests/dom.mjs` is a small DOM the whole UI suite runs against.
+
+### The harness is tested too
+
+`tests/dom.mjs` is the one thing everything else trusts, and a shim that is subtly wrong does
+not fail — it passes, and says the wrong thing. It had already been wrong three times, each
+found by hand in a browser rather than by the suite:
+
+- `textContent` was not decoding entities, so a textarea's value could never match its markup
+- form state was read off the attribute instead of the property, so a `<select>` looked stuck
+- clearing `innerHTML` dropped children without detaching them, so a node the page had thrown
+  away still bubbled its clicks to the document
+
+That last one is the worst kind: it made the assertion about held references pass while the
+app was broken. `tests/dom.test.mjs` now states each rule as a rule of the *real* DOM, and
+marks the places the shim deliberately does less.
+
+The check that matters: revert `render()` to `innerHTML = …` and the suite reports five
+failures. Before, it reported none.
+
+### The level is the unit
+
+A level is very nearly its own exercise — a floor glute bridge and a single-leg hip thrust off a
+chair share a progression and nothing else. So a ladder rung owns whatever differs from the
+exercise, and inherits the rest:
+
+| on a rung | what it does |
+|---|---|
+| `name`, `note` | what you are doing at this level |
+| `kit` | **replaces** the exercise's list — push-ups start on the bars and end up in the rings |
+| `image` | levels that look nothing alike get their own picture |
+| `perSide` | a level is unilateral or it is not; the exercise is neither |
+| `range`, `step`, `rest`, `metric` | when a rung is different enough that inheriting would be wrong |
+| `cues` / `addCues` | replace the coaching, or add a caveat to it |
+
+`PR.rung(ex, level)` resolves all of it in one place, and everything downstream reads that
+rather than reaching into the exercise. Levelling up lands on the new level's range, and
+dropping back lands on the one below's.
+
+The pistol squat is the clearest case: it sits at the top of the split-squat ladder carrying
+`range: [6, 10]`, because the 10-15 it used to inherit is not a prescription anyone would write
+for a pistol — and its own cues, because "front shin roughly vertical" is not an instruction for
+a one-legged squat. The ladder badges which rungs override what, so you can see it coming.
+
+### One session timeline
+
+`PR.timeline(items)` turns a session into an explicit sequence — `adjust, transition, work,
+rest, work, rest…`. The estimate is the sum of it and the app walks it to decide what happens
+after each set, so "is there a rest between these two?" has exactly one answer. Two independent
+models is how the estimate came to count a rest between exercises that the app was not running.
+
+### The entry is a log, not a copy of the plan
+
+A running session stores only what you **did**: which sets are logged, at what, and any number
+you deliberately changed. `null` means "follow the plan"; a number means "I changed this";
+logging a set freezes both, because from then on they are a record rather than a prescription.
+
+It used to store a frozen copy of the prescription too — level, target, vest, and a number on
+every set including the ones not yet done. That is two answers to "what am I doing right now",
+and they drift: lower the session cap or cross a phase boundary mid-workout and the untouched
+sets kept the old numbers.
+
+### Rendering
+
+Views are rendered as HTML strings, which is simple and worth keeping. Assigning them to
+`innerHTML` is not: it rebuilds every node on every tap, which silently detaches any element a
+handler is still holding, loses scroll position mid-session, and stacks up listeners on nodes
+that survive. `patch.js` walks the new tree against the live one and changes only what differs.
+
+Structural blocks carry ids and cards carry `data-ex` so they are matched by key rather than by
+position — logging the first set removes the "tap Start" hint, and without keys everything below
+it would shift by one and be rebuilt anyway.
+
+### Editing the program
+
+Editing the program means editing `data/program.js` only — add an exercise, give it a station, a
+ladder and a rep range, and drop its id into a workout's `order`. The engine and the UI pick it
+up with no other changes.
+
+A workout's order entry can bend the shared prescription for one day without forking the
+progression state:
+
+- `levelOffset: 1` — run it a level harder that day (workout B's ring rows: the "feet elevated"
+  variant from the original plan)
+- `setCount: 2` — run fewer or more sets that day (push-ups on the pull day)
+
+Both are judged correctly when the session is scored, so two sets on day A counts as complete
+while two sets on day B does not. The offset moves what you *do* today without moving what you
+have *earned* — progression is always judged on the level the state is actually on.
+
+## CI and publishing
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push and pull request:
+
+- **The tests, on node 20 and 22.** 20 is what the deploy workflow pins; 22 is what it gets
+  developed on. The pair catches an accidental dependency on a newer built-in, which would
+  otherwise only surface at release time.
+- **A generated-files check.** `node tools/gen-images.mjs` is re-run and the result diffed against
+  what is committed, so adding an illustration and forgetting to regenerate fails with the command
+  to fix it rather than with a picture that silently vanishes offline.
+
+[.github/workflows/deploy.yml](.github/workflows/deploy.yml) publishes to GitHub Pages on a
+**published release**, or on demand from the Actions tab — the same trigger, permissions and
+concurrency settings as the other static sites in this account.
+
+Two things it does that those do not:
+
+- **It runs the tests first.** All five suites, no dependencies to install. A release that would
+  ship a broken progression engine, a dead click handler, or a generated image list that has
+  drifted from disk does not get published.
+- **It stamps the service worker's cache name with the commit SHA** instead of appending
+  `?v=<sha>` to the script tags. The house pattern would *break offline mode here*: `sw.js`
+  precaches `./app.js`, `caches.match` is query-sensitive, and a page asking for
+  `./app.js?v=abc1234` would miss every precached entry. Measured on the assembled artifact:
+  seven precached files the page never requests, six requested files not in the cache, no overlap.
+  The worker is already network-first with the HTTP cache bypassed, which is the problem `?v=`
+  exists to solve — so the only thing worth busting is the cache *name*, so that one release can
+  never serve a mixture of its own files and the previous one's.
+
+Only what the page serves is uploaded: no README, no `tests/`, no `tools/`. 28 files, 2.7 MB, of
+which 2.4 MB is illustrations.
+
+That copy list is written out by hand in the workflow, which makes it the one thing in this repo
+that can break **only in production** — add a script to `index.html`, forget to add it there, and
+everything local keeps working while the published site does not. So the test suite asserts it:
+every file the page loads and every file the service worker precaches must appear in the workflow's
+`cp` lines, and nothing in those lines may be missing from disk.
+
+## Data
+
+Everything is in `localStorage` under `workout-program:v1`, stamped with a schema version.
+Changing the shape of what is stored means bumping `SCHEMA` in `progression.js` and adding a
+step to `migrate()` — which runs before anything reads the data, and tells you on screen what it
+changed rather than moving a number silently. Clearing site data wipes it, so
+export from the **Data** tab now and then — it downloads a JSON file with every session, and
+importing it restores the exact state. Sessions are never overwritten by the app; the only
+destructive actions are the two explicit reset buttons.
+
+An in-progress session survives closing the tab: reopen and it picks up with the logged sets
+still there.

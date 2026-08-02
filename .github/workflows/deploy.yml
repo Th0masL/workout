@@ -1,0 +1,84 @@
+name: Deploy site to GitHub Pages
+
+# Publish only when you cut a release (or trigger it by hand from the Actions tab).
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+# Permissions the GitHub Pages deploy action needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let an in-flight one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 680 assertions across five suites, no dependencies to install. This
+      # blocks a release that would ship a broken progression engine, a dead
+      # click handler, or a generated image list that has drifted from disk.
+      - name: Run the tests
+        run: node tests/all.mjs
+
+      # "Build": nothing to build, so gather exactly what the page serves into
+      # _site/ and leave the rest (README, tests/, tools/, .git) out of it.
+      # sw.js has to sit at the ROOT or its scope will not cover the app.
+      - name: Assemble site
+        run: |
+          mkdir -p _site/data _site/icons _site/images
+          cp index.html styles.css manifest.json icon.svg _site/
+          cp app.js progression.js patch.js audio.js sw.js _site/
+          cp data/images.js data/program.js _site/data/
+          cp icons/*.png _site/icons/
+          cp images/*.gif images/*.jpg _site/images/
+
+      # Cache-busting, done the way THIS app is built.
+      #
+      # The other sites in this account append ?v=<sha> to the <script> and
+      # <link> tags. That would break offline here: sw.js precaches "./app.js",
+      # and a request for "./app.js?v=abc" does not match it — caches.match is
+      # query-sensitive — so the shell it carefully precached would be dead
+      # weight and the first offline visit would fail.
+      #
+      # It is also unnecessary. The worker is already network-first and
+      # bypasses the browser's own HTTP cache on the network leg, which is
+      # exactly the problem ?v= exists to solve. The one thing worth stamping is
+      # the cache NAME, so a release can never serve a mixture of old and new
+      # files out of a cache built by the previous one.
+      - name: Stamp the service worker cache with this commit
+        run: |
+          VER="${GITHUB_SHA:0:7}"
+          sed -i -E "s/^var VERSION = \".*\";$/var VERSION = \"$VER\";/" _site/sw.js
+          # Fail loudly rather than silently shipping an unstamped worker.
+          grep -q "^var VERSION = \"$VER\";$" _site/sw.js
+          echo "service worker cache: workout-program-$VER"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

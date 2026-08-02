@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1320" />
+  <title>Workout Program — rings & push-up bars</title>
+  <meta name="description" content="Local-first tracker for a 3x/week home ring workout, with automatic double-progression and vest microloading." />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Installable: launches fullscreen from the home screen, no browser chrome. -->
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <!-- iOS ignores the manifest for these two. -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Workout" />
+  <meta name="mobile-web-app-capable" content="yes" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap head-row">
+      <div class="head-main">
+        <h1>🏋️ <span id="progName">Workout</span></h1>
+        <p class="tagline" id="headline">Loading…</p>
+      </div>
+      <button class="sound-test" data-act="test-sound" title="Test the sound" aria-label="Test the sound">🔊</button>
+      <div class="phase-badge" id="phaseBadge" title="Training phase"></div>
+    </div>
+    <nav class="wrap tabs" role="tablist">
+      <button class="tab" data-tab="today" role="tab" aria-selected="true">Today</button>
+      <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
+      <button class="tab" data-tab="program" role="tab" aria-selected="false">Program</button>
+      <button class="tab" data-tab="data" role="tab" aria-selected="false">Data</button>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <section id="view-today" class="view" role="tabpanel"></section>
+    <section id="view-history" class="view" role="tabpanel" hidden></section>
+    <section id="view-program" class="view" role="tabpanel" hidden></section>
+    <section id="view-data" class="view" role="tabpanel" hidden></section>
+  </main>
+
+  <!-- Never expected to show. When it does, the point is that your logged sets
+       are already safe and the session can be finished — a blank page says
+       neither. -->
+  <div class="crash" id="crash" hidden>
+    <div class="wrap">
+      <strong>Something went wrong <span id="crashWhere"></span></strong>
+      <div class="crash-what" id="crashWhat"></div>
+      <p>Every set you have logged is already saved in this browser. Reload and carry on.</p>
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" id="crashReload">Reload</button>
+        <button class="btn btn-sm" id="crashExport">Download a backup</button>
+        <button class="btn btn-ghost btn-sm" id="crashHide">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="rest-bar" id="restBar" hidden>
+    <button class="rest-skip" id="restSkip" aria-label="Skip rest">✕</button>
+    <div class="rest-body">
+      <div class="rest-time" id="restTime">0:00</div>
+      <div class="rest-label" id="restLabel">Rest</div>
+    </div>
+    <button class="rest-add" id="restAdd">+30s</button>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>Everything is stored in this browser only. Export from the <strong>Data</strong> tab to keep a backup.</span>
+    </div>
+  </footer>
+
+  <script src="patch.js"></script>
+  <script src="audio.js"></script>
+  <script src="data/images.js"></script>
+  <script src="data/program.js"></script>
+  <script src="progression.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
