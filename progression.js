@@ -75,6 +75,15 @@
        * bars, so its own kit REPLACES the exercise default rather than adding
        * to it. Same for the picture. */
       kit: r.kit || ex.kit || [],
+      /* Where the rings have to hang for THIS level. Assisted dips need them
+       * low enough that the feet reach the floor; unassisted ones need them
+       * high enough that the feet cannot. Those two windows do not overlap, so
+       * the station cannot be a property of the exercise. */
+      station: r.station || ex.station,
+      /* A rung can be held shut until a phase opens. Deeper dips are the case:
+       * the range is a genuine progression step, but not one to take in the
+       * first six weeks back. 0 means no gate. */
+      minPhase: r.minPhase || 0,
       image: r.image || ex.image || "",
       perSide: !!r.perSide,
       /* Coaching follows the level too. A pistol squat and a bodyweight squat
@@ -157,6 +166,13 @@
       level: lvl,
       levelName: r.name,
       levelNote: r.note,
+      station: r.station,
+      /* The next rung, when it is held shut by a phase — so the card can say
+       * what is waiting rather than leaving a ladder that mysteriously stops. */
+      nextGate:
+        lvl < maxLevel(ex) && rung(ex, lvl + 1).minPhase > ((phase && phase.id) || 0)
+          ? { name: rung(ex, lvl + 1).name, phase: rung(ex, lvl + 1).minPhase }
+          : null,
       cues: r.cues.slice(),
       offset: e.levelOffset || 0,
       perSide: r.perSide,
@@ -346,6 +362,23 @@
 
     /* Promote: ladder first, then vest. */
     if (st.level < maxLevel(ex)) {
+      var next = rung(ex, st.level + 1);
+      /* Gated rung: hold here and bank it, exactly as a locked phase does.
+       * Deliberately NOT skipping ahead to the vest — the whole point of the
+       * gate is that this range is earned before more load is added. */
+      if (next.minPhase && (phase.id || 0) < next.minPhase) {
+        st.topOutStreak = R.topOutSessions;
+        events.push({
+          type: "locked",
+          text:
+            "Ready for “" +
+            next.name +
+            "”, but it opens in Phase " +
+            next.minPhase +
+            ". Holding here until then.",
+        });
+        return { state: st, events: events, hit: true };
+      }
       st.level += 1;
       var up = rung(ex, st.level);
       st.target = up.range[0];
@@ -636,7 +669,10 @@
     var r = rung(ex, level);
     if (r.image) return [r.image];
     var lvl = id + "-L" + (r.index + 1);
-    var names = [lvl + ".gif", lvl + ".jpg", id + ".gif", id + ".jpg"];
+    var names = [
+      lvl + ".gif", lvl + ".svg", lvl + ".jpg",
+      id + ".gif", id + ".svg", id + ".jpg",
+    ];
     if (have && have.length) {
       names = names.filter(function (n) {
         return have.indexOf(n) >= 0;

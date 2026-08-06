@@ -55,6 +55,10 @@ const rows = (c) => c.querySelectorAll('.set-row');
 const tab = (w, name) => $$(w, '.tab').find(t => t.dataset.tab === name).click();
 const stored = (w) => JSON.parse(w.localStorage.getItem(KEY) || 'null');
 const holdRow = (w, id) => rows(card(w, id))[0];
+const nowCard = (w) => {
+  const c = w.document.querySelector('.ex-card--now');
+  return c ? c.dataset.ex : null;
+};
 const banner = (w) => w.document.getElementById('crash');
 /* app.js catches its own failures now and shows a banner instead of throwing,
  * so "did not throw" stopped being enough on its own — an interaction has to
@@ -71,6 +75,7 @@ function works(label, fn) {
   return true;
 }
 const P = (() => { const w = boot(); return w.PROGRAM; })();
+const PR_range = (w, id, level) => w.Progression.rung(w.PROGRAM.exercises[id], level).range;
 
 // ---------------------------------------------------------------- //
 section('It boots');
@@ -257,6 +262,141 @@ check('leaving a set unlogged holds the target', stored(w).exerciseState['ring-p
   P.exercises['ring-pullup'].range[0]);
 check('and counts against you', stored(w).exerciseState['ring-pullup'].failStreak, 1);
 
+
+// ---------------------------------------------------------------- //
+section('One set at a time');
+
+// Reported from real use: a mis-tap on the wrong row records a set you have not
+// done, at numbers meant for later, and a tick appearing in the wrong place is
+// the only clue.
+w = boot();
+const live = (win, id) => rows(card(win, id)).map((r) => {
+  const b = r.querySelector('[data-act="log-set"]');
+  return b ? !b.hasAttribute('disabled') : null;
+});
+check('only the first set can be logged', live(w, 'ring-pullup'), [true, false, false]);
+check('and the rest are visibly waiting',
+  rows(card(w, 'ring-pullup')).map((r) => r.classList.contains('set-row--waiting')),
+  [false, true, true]);
+
+// The disabled attribute is a hint; the handler has to enforce it too, because
+// the delegated listener never sees the button's state.
+rows(card(w, 'ring-pullup'))[2].querySelector('[data-act="log-set"]').click();
+check('tapping a set out of turn does nothing',
+  rows(card(w, 'ring-pullup')).map((r) => r.classList.contains('set-row--done')),
+  [false, false, false]);
+
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+check('logging the first hands the turn to the second', live(w, 'ring-pullup'), [null, true, false]);
+rows(card(w, 'ring-pullup'))[1].querySelector('[data-act="log-set"]').click();
+check('and then to the third', live(w, 'ring-pullup'), [null, null, true]);
+
+// Undo gives the turn back to the row it reopened.
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="undo-set"]').click();
+check('undo hands the turn back', live(w, 'ring-pullup'), [true, null, false]);
+
+// A cut set is stepped over rather than blocking the ones behind it.
+w = boot();
+cut(w, 'ring-pullup', 1);
+check('a cut set does not hold up the queue', live(w, 'ring-pullup'), [true, null, false]);
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+check('the turn skips straight over it', live(w, 'ring-pullup'), [null, null, true]);
+
+// Timed rows obey the same rule, on both of their buttons.
+w = boot();
+const startable = (win, id) => rows(card(win, id)).map((r) => {
+  const b = r.querySelector('[data-act="start-hold"]');
+  return b ? !b.hasAttribute('disabled') : null;
+});
+// Ring fallouts are a three-set timed exercise, on workout B.
+$$(w, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+check('a timed exercise queues its Start buttons too',
+  startable(w, 'ring-fallout'), [true, false, false]);
+rows(card(w, 'ring-fallout'))[2].querySelector('[data-act="start-hold"]').click();
+check('a hold cannot be started out of turn — and does not even start a session',
+  stored(w).active, null);
+rows(card(w, 'ring-fallout'))[0].querySelector('[data-act="start-hold"]').click();
+check('but the first one starts', !!stored(w).active.hold, true);
+
+// ---------------------------------------------------------------- //
+section('Logging a hold without running the clock');
+
+// Reported from real use: a timed set marked done could not be corrected. Undo
+// put the row back, but Start was the only way out of it — which means hanging
+// for another thirty seconds to fix a miscount.
+w = boot();
+check('a timed row offers both Start and a tick',
+  [holdRow(w, 'dead-hang').querySelectorAll('[data-act="start-hold"]').length,
+   holdRow(w, 'dead-hang').querySelectorAll('[data-act="log-set"]').length],
+  [1, 1]);
+works('logging a hold by hand', () =>
+  holdRow(w, 'dead-hang').querySelector('[data-act="log-set"]').click());
+check('it records the number shown, with no clock run',
+  stored(w).active.entries['dead-hang'].sets[0].value, 20);
+check('and no hold was ever started', stored(w).active.hold, undefined);
+
+// The correction round-trip that was impossible before.
+holdRow(w, 'dead-hang').querySelector('[data-act="undo-set"]').click();
+for (let i = 0; i < 3; i++) holdRow(w, 'dead-hang').querySelector('[data-act="rep-inc"]').click();
+check('the reopened row can be adjusted',
+  holdRow(w, 'dead-hang').querySelector('.set-val').textContent, '35s');
+holdRow(w, 'dead-hang').querySelector('[data-act="log-set"]').click();
+check('and logged at the corrected time',
+  stored(w).active.entries['dead-hang'].sets[0].value, 35);
+check('which is what the session records', (() => {
+  $$(w, '[data-act="finish"]')[0].click();
+  return stored(w).sessions[0].entries['dead-hang'].sets[0].value;
+})(), 35);
+
+// A hold left running must not attach itself to a row logged by hand.
+w = boot();
+holdRow(w, 'dead-hang').querySelector('[data-act="start-hold"]').click();
+w.advance(5000 + 8000);
+holdRow(w, 'ring-scap-pull') && null;
+works('logging by hand while a hold runs', () =>
+  holdRow(w, 'dead-hang').querySelector('[data-act="stop-hold"]').click());
+check('the running hold is committed, not lost',
+  stored(w).active.entries['dead-hang'].sets[0].value, 8);
+
+// ---------------------------------------------------------------- //
+section('Skipping a whole exercise');
+
+// Cutting every set one tap at a time works but is absurd when the answer is
+// "not today" — and minSets makes it impossible anyway.
+w = boot();
+const fullMins = +/~(\d+) min/.exec($(w, '.sh-meta').textContent)[1];
+check('every card offers it', $$(w, '[data-act="skip-exercise"]').length, $$(w, '.ex-card').length);
+works('skipping an exercise', () =>
+  card(w, 'ring-pullup').querySelector('[data-act="skip-exercise"]').click());
+check('every set is cut', skipped(w, 'ring-pullup'), [true, true, true]);
+check('including past the minSets floor that blocks cutting by hand',
+  P.exercises['ring-pullup'].minSets > 0, true);
+check('the card says so', card(w, 'ring-pullup').classList.contains('ex-card--off'), true);
+check('the header counts nothing', card(w, 'ring-pullup').querySelector('.ex-target b').textContent,
+  '0 × 6 reps');
+check('and the estimate drops', +/~(\d+) min/.exec($(w, '.sh-meta').textContent)[1] < fullMins, true);
+check('the marker moves on', nowCard(w) !== 'ring-pullup', true);
+
+// Reversible in one tap.
+works('putting it back', () =>
+  card(w, 'ring-pullup').querySelector('[data-act="skip-exercise"]').click());
+check('every set returns', skipped(w, 'ring-pullup'), [false, false, false]);
+check('at the prescribed number',
+  rows(card(w, 'ring-pullup'))[0].querySelector('.set-val').textContent, '6reps');
+check('and the estimate comes back',
+  +/~(\d+) min/.exec($(w, '.sh-meta').textContent)[1], fullMins);
+
+// Sets already logged are kept — skipping is about what is left to do.
+w = boot();
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+card(w, 'ring-pullup').querySelector('[data-act="skip-exercise"]').click();
+check('a logged set survives being skipped',
+  rows(card(w, 'ring-pullup'))[0].classList.contains('set-row--done'), true);
+check('while the rest are cut', skipped(w, 'ring-pullup').slice(1), [true, true]);
+$$(w, '[data-act="finish"]')[0].click();
+check('and one set of one is scored as complete',
+  stored(w).exerciseState['ring-pullup'].target, P.exercises['ring-pullup'].range[0] + 1);
+
 // ---------------------------------------------------------------- //
 section('Extra sets — the regression that froze a card');
 
@@ -325,7 +465,7 @@ check('and the pictures are still there', $$(file, '.ex-img').length > 5, true);
 
 // The chain used to probe blind: four requests per exercise, 404 each, before
 // giving up. With the generated manifest nothing missing is ever asked for.
-const onDisk = new Set(readdirSync(join(root, 'images')).filter(f => /\.(gif|jpg)$/.test(f)));
+const onDisk = new Set(readdirSync(join(root, 'images')).filter(f => /\.(gif|svg|jpg)$/.test(f)));
 const localSrcs = $$(http, '.ex-img')
   .map(i => i.getAttribute('src')).filter(u => !/^https?:/.test(u));
 const localFallbacks = $$(http, '.ex-img').flatMap(i =>
@@ -375,6 +515,85 @@ check('the kit chip follows the level',
 check('and drops what the level no longer needs',
   card(w, 'pushup').querySelector('.ex-kit').textContent.includes('push-up bars'), false);
 
+// A ladder that appears to stop is worse than one that says why.
+w = boot({ stored: { version: 3, settings: { phaseOverride: 2 },
+  exerciseState: { 'ring-dip': { level: 3, vest: 0, target: 8, topOutStreak: 1, failStreak: 0 } } } });
+const gateNote = (win) => card(win, 'ring-dip').querySelectorAll('.ex-levelnote')
+  .map((e) => e.textContent).find((t) => /Next up/.test(t)) || '';
+check('the card names the rung it is waiting on',
+  /Bodyweight, below parallel/.test(gateNote(w)), true);
+check('and when it opens', /opens in Phase 3/.test(gateNote(w)), true);
+check('and that it is not lost by waiting', /banked/.test(gateNote(w)), true);
+card(w, 'ring-dip').querySelector('[data-act="toggle-info"]').click();
+check('the ladder tags the gated rung',
+  [...card(w, 'ring-dip').querySelectorAll('.rung-tag')].some(t => t.textContent === 'Phase 3'), true);
+w = boot({ stored: { version: 3, settings: { phaseOverride: 3 },
+  exerciseState: { 'ring-dip': { level: 3, vest: 0, target: 8, topOutStreak: 1, failStreak: 0 } } } });
+check('and the notice goes away once it is open', gateNote(w), '');
+
+
+// ---------------------------------------------------------------- //
+section('Correcting the level by hand');
+
+// The app's idea of where you are can be wrong — a ladder gets rewritten, or
+// you come back from a break. Until this existed the only remedies were
+// resetting all sixteen exercises or editing the exported JSON.
+const stepper = (win, id) => card(win, id).querySelector('.lvl-set');
+const lvlOf = (win, id) => stepper(win, id).querySelector('.lvl-set-val').textContent.trim();
+const bump = (win, id, dir) =>
+  card(win, id).querySelector(`[data-act="level-${dir}"]`).click();
+
+w = boot();
+card(w, 'ring-dip').querySelector('[data-act="toggle-info"]').click();
+check('the stepper is there', !!stepper(w, 'ring-dip'), true);
+check('showing where you are', lvlOf(w, 'ring-dip'), '1 / 5');
+check('and cannot go below the bottom',
+  stepper(w, 'ring-dip').querySelector('[data-act="level-dec"]').hasAttribute('disabled'), true);
+
+works('moving up a level', () => bump(w, 'ring-dip', 'inc'));
+check('it moves', lvlOf(w, 'ring-dip'), '2 / 5');
+check('the card follows', /Seated, heels on the sofa chair/.test(card(w, 'ring-dip').textContent), true);
+check('and it is stored', stored(w).exerciseState['ring-dip'].level, 1);
+
+// A level set by hand is a fresh start on that rung.
+bump(w, 'ring-dip', 'inc');
+bump(w, 'ring-dip', 'inc');
+check('three taps lands on level 4', lvlOf(w, 'ring-dip'), '4 / 5');
+check('the reps reset to that level’s range',
+  stored(w).exerciseState['ring-dip'].target, PR_range(w, 'ring-dip', 3)[0]);
+check('and the top of the ladder stops it',
+  (() => { bump(w, 'ring-dip', 'inc'); bump(w, 'ring-dip', 'inc'); return lvlOf(w, 'ring-dip'); })(),
+  '5 / 5');
+
+// Streaks belong to the rung you earned them on.
+w = boot({ stored: { version: 3, exerciseState: {
+  'ring-pullup': { level: 0, vest: 0, target: 8, topOutStreak: 1, failStreak: 2 } } } });
+card(w, 'ring-pullup').querySelector('[data-act="toggle-info"]').click();
+bump(w, 'ring-pullup', 'inc');
+check('a hand-set level clears the streaks',
+  [stored(w).exerciseState['ring-pullup'].topOutStreak,
+   stored(w).exerciseState['ring-pullup'].failStreak], [0, 0]);
+
+// Sets already logged pin it: finishSession files them under the level as it
+// stands at the end, so moving it afterwards would mislabel the history.
+w = boot();
+card(w, 'ring-pullup').querySelector('[data-act="toggle-info"]').click();
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+check('logging a set locks the stepper',
+  card(w, 'ring-pullup').querySelector('[data-act="level-inc"]').hasAttribute('disabled'), true);
+check('and says why', /sets already logged today/.test(stepper(w, 'ring-pullup').textContent), true);
+bump(w, 'ring-pullup', 'inc');
+check('so it cannot be moved', stored(w).exerciseState['ring-pullup'].level, 0);
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="undo-set"]').click();
+check('undoing the set unlocks it again',
+  card(w, 'ring-pullup').querySelector('[data-act="level-inc"]').hasAttribute('disabled'), false);
+
+// A one-rung exercise has nothing to move along.
+w = boot();
+card(w, 'movement-prep').querySelector('[data-act="toggle-info"]').click();
+check('no stepper where there is no ladder',
+  card(w, 'movement-prep').querySelectorAll('.lvl-set').length, 0);
+
 // ---------------------------------------------------------------- //
 section('Session length cap');
 
@@ -401,6 +620,10 @@ check('all three sets logged',
   rows(card(w, 'ring-pullup')).every(r => r.classList.contains('set-row--done')), true);
 works('finishing does not throw', () => $$(w, '[data-act="finish"]')[0].click());
 check('the session is in history', stored(w).sessions.length, 1);
+// The timestamp on each set is the only record of how long you really rested.
+// Without it the session-length model can only ever be checked against a total.
+check('and each logged set keeps when it happened',
+  stored(w).sessions[0].entries['ring-pullup'].sets.every((s) => typeof s.at === 'string'), true);
 check('the active session is cleared', stored(w).active, null);
 check('hitting every set moves the target up', pullTarget(), P.exercises['ring-pullup'].range[0] + 1);
 check('the summary says what changed', $$(w, '.summary-panel .ev').length > 0, true);
@@ -786,7 +1009,10 @@ check('once, not every tick', said(w).filter((t) => t === 'Ten seconds').length,
 w.advance(6000);
 check('the wait between SETS ends with a beep', beeps(w), 1);
 settle(w);
-check('and says which set is next', said(w).pop(), 'Ring pull-ups, set 2');
+// The numbers matter as much as the name — otherwise you have to pick the
+// phone up off the floor to find out what you were just told to do.
+check('and says which set is next, with the numbers',
+  said(w).pop(), 'Ring pull-ups, set 2, 6 reps');
 
 // And between exercises, naming the exercise rather than just the set.
 w = boot({ listen: true });
@@ -794,14 +1020,15 @@ for (const r of rows(card(w, 'ring-pullup'))) r.querySelector('[data-act="log-se
 w.advance(151000);
 settle(w);
 check('the wait between EXERCISES also sounds', beeps(w), 1);
-check('naming what comes next', said(w).pop(), 'Hanging leg raises, set 1');
+check('naming what comes next', said(w).pop(), 'Hanging leg raises, set 1, 8 reps');
 
 // A superset has no wait mid-round, so there is nothing to count down — but you
 // still have to be told to go, or you would stand there waiting for a beep.
 w = boot({ listen: true });
 rows(card(w, 'split-squat'))[0].querySelector('[data-act="log-set"]').click();
 settle(w);
-check('mid-pair it tells you to go straight over', said(w), ['Ring face pulls now']);
+check('mid-pair it tells you to go straight over',
+  said(w), ['Ring face pulls, set 1, 12 reps, now']);
 check('with no beep, because there is no wait', beeps(w), 0);
 check('and no clock running', $(w, '#restBar').hidden, true);
 
@@ -813,7 +1040,43 @@ card(w, 'ring-dip').querySelectorAll('.rest-step')[0].click();
 w.advance(151000);
 settle(w);
 check('a wait you tapped ends the same way', beeps(w), 1);
-check('and says the same thing', said(w).pop(), 'Ring dips, set 2');
+check('and says the same thing', said(w).pop(), 'Ring dips, set 2, 6 reps');
+
+// Timed work is announced in seconds, per-side work says so, and the vest is
+// mentioned only when it is actually on.
+w = boot({ listen: true });
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+w.advance(151000); settle(w);
+check('reps are called reps', /\d+ reps$/.test(said(w).pop()), true);
+
+// Pull-ups rather than dips: dips are supersetted, so the cue after them names
+// the partner, not their own next set.
+w = boot({ listen: true, stored: { version: 3, settings: { phaseOverride: 3 },
+  exerciseState: { 'ring-pullup': { level: 2, vest: 2, target: 6, topOutStreak: 0, failStreak: 0 } } } });
+rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+w.advance(151000); settle(w);
+check('a loaded exercise says the weight', said(w).pop(), 'Ring pull-ups, set 2, 6 reps, 2 kilos');
+// And an unloaded one does not say "bodyweight" every single time.
+check('an unloaded one stays quiet about it',
+  /kilo/.test((() => {
+    const q = boot({ listen: true });
+    rows(card(q, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
+    q.advance(151000); q.advance(1000);
+    return q.heard.filter((h) => h.said).pop().said;
+  })()), false);
+
+w = boot({ listen: true, stored: { version: 3,
+  exerciseState: { 'split-squat': { level: 4, vest: 0, target: 6, topOutStreak: 0, failStreak: 0 } } } });
+rows(card(w, 'split-squat'))[0].querySelector('[data-act="log-set"]').click();
+settle(w);
+check('a single-leg level says per side',
+  said(w).pop(), 'Ring face pulls, set 1, 12 reps, now');
+w = boot({ listen: true, stored: { version: 3,
+  exerciseState: { 'ring-leg-curl': { level: 4, vest: 0, target: 8, topOutStreak: 0, failStreak: 0 } } } });
+$$(w, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+rows(card(w, 'ring-leg-curl'))[0].querySelector('[data-act="log-set"]').click();
+w.advance(91000); settle(w);
+check('per side is announced', /per side/.test(said(w).pop()), true);
 
 // A hold is the one thing here with no reps to count, and you cannot look at
 // the phone while hanging off the rings — so the seconds get called out.
@@ -991,10 +1254,6 @@ section('Where you are');
 // find your place by scanning for the first unlogged set, which is exactly the
 // thinking this app exists to remove.
 w = boot();
-const nowCard = (win) => {
-  const c = win.document.querySelector('.ex-card--now');
-  return c ? c.dataset.ex : null;
-};
 check('exactly one card is marked', $$(w, '.ex-card--now').length, 1);
 check('and before you start it is the first thing', nowCard(w), 'movement-prep');
 check('it says so on the card', card(w, 'movement-prep').querySelector('.tag-now').textContent, 'now');
@@ -1061,14 +1320,16 @@ check('and the skipped warm-up is not marked',
   card(w, 'movement-prep').classList.contains('ex-card--now'), false);
 
 // Everything logged means nothing is marked, rather than something wrong.
+// Timed sets carry a ✓ as well as Start, so this really does finish the lot.
 w = boot();
 for (let i = 0; i < 60; i++) {
   const b = $(w, '.set-row [data-act="log-set"]');
   if (!b) break;
   b.click();
 }
-check('with only holds left, the marker is on one of them',
-  ['movement-prep', 'dead-hang'].includes(nowCard(w)), true);
+check('a fully logged session marks nothing', $$(w, '.ex-card--now').length, 0);
+check('and every set is done',
+  $$(w, '.set-row').filter((r) => !r.classList.contains('set-row--done')).length, 0);
 
 // ---------------------------------------------------------------- //
 section('When something breaks');
@@ -1125,6 +1386,106 @@ check('the render and the tap handler are both wrapped',
 check('and anything that escapes them is caught globally',
   [/addEventListener\("error"/.test(src), /addEventListener\("unhandledrejection"/.test(src)],
   [true, true]);
+
+
+// ---------------------------------------------------------------- //
+section('Everything you see survives a reload');
+
+// There are 32 hand-written save() calls in app.js. Miss one and the change is
+// silently lost when you close the tab — invisible until it bites, and no
+// reviewer catches it. Rather than trust all 32, assert the property: after any
+// action, booting fresh from storage has to show the same thing.
+const visible = (win) => ({
+  header: $(win, '.session-head h2').textContent.trim(),
+  meta: $(win, '.sh-meta').textContent.replace(/~\d+ min/, '~N min').trim(),
+  cap: ($(win, '.cap--on') || { textContent: '' }).textContent.trim(),
+  picker: $$(win, '.pick-btn--on').map((b) => b.textContent).join(''),
+  cards: $$(win, '.ex-card').length,
+  targets: $$(win, '.ex-target').map((e) => e.textContent.trim()),
+  levels: $$(win, '.ex-level').map((e) => e.textContent.trim()),
+  done: $$(win, '.set-row--done').length,
+  skipped: $$(win, '.set-row--skipped').length,
+  extra: $$(win, '.set-row--extra').length,
+  off: $$(win, '.ex-card--off').length,
+  now: nowCard(win),
+  /* The numbers ON the sets, not just how many are done — a rep you nudged is
+   * a change that has to survive too. */
+  setValues: $$(win, '.set-val').map((e) => e.textContent.trim()),
+  note: ($(win, '#sessionNote') || { value: '' }).value,
+  sessions: (stored(win) || { sessions: [] }).sessions.length,
+});
+
+function persists(label, act) {
+  const before = JSON.stringify(visible(w));
+  act();
+  const after = visible(w);
+  /* Boot a second app from nothing but what was written to storage. If the
+   * action forgot to save, this comes back looking like the world before it. */
+  const reloaded = visible(boot({ stored: stored(w) }));
+  if (JSON.stringify(after) === before) {
+    return check(label + ' — (nothing changed, test is vacuous)', 'changed', 'changed');
+  }
+  return check(label, reloaded, after);
+}
+
+w = boot();
+persists('picking the other workout', () =>
+  $$(w, '.pick-btn').find((b) => b.dataset.w === 'B').click());
+persists('picking back', () =>
+  $$(w, '.pick-btn').find((b) => b.dataset.w === 'A').click());
+persists('capping the session', () =>
+  $$(w, '[data-act="set-cap"]').find((b) => b.dataset.cap === '40').click());
+persists('going back to full', () =>
+  $$(w, '[data-act="set-cap"]').find((b) => b.dataset.cap === '0').click());
+persists('starting a session', () => $(w, '[data-act="start"]').click());
+persists('logging a set', () =>
+  rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click());
+persists('changing the reps on a set', () =>
+  rows(card(w, 'ring-pullup'))[1].querySelector('[data-act="rep-inc"]').click());
+persists('undoing a set', () =>
+  rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="undo-set"]').click());
+persists('logging it again, so the session has something in it', () =>
+  rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click());
+persists('adding an extra set', () =>
+  card(w, 'ring-row').querySelector('[data-act="add-set"]').click());
+persists('cutting a set', () => cut(w, 'hanging-leg-raise', 2));
+persists('skipping a whole exercise', () =>
+  card(w, 'calf-raise').querySelector('[data-act="skip-exercise"]').click());
+persists('putting it back', () =>
+  card(w, 'calf-raise').querySelector('[data-act="skip-exercise"]').click());
+persists('moving a level by hand', () => {
+  card(w, 'ring-dip').querySelector('[data-act="toggle-info"]').click();
+  card(w, 'ring-dip').querySelector('[data-act="level-inc"]').click();
+});
+persists('typing a session note', () => {
+  const n = $(w, '#sessionNote');
+  n.value = 'left shoulder fine';
+  n.listeners.get('input').forEach((fn) => fn());
+});
+persists('finishing the session', () => $$(w, '[data-act="finish"]')[0].click());
+
+// Settings live in the same object and go through the same save().
+w = boot();
+tab(w, 'data');
+for (const [sel, value, label] of [
+  ['#optCap', '30', 'the session cap'],
+  ['#optPhase', '3', 'a forced phase'],
+  ['#optLead', '3', 'the count-in'],
+  ['#optSound', 'beep', 'the sound mode'],
+]) {
+  $(w, sel).value = value;
+  $(w, sel).listeners.get('change').forEach((fn) => fn());
+  const fresh = boot({ stored: stored(w) });
+  tab(fresh, 'data');
+  check(`${label} survives a reload`, $(fresh, sel).value, value);
+}
+tab(w, 'today');
+
+// The two deliberate exceptions, so nobody "fixes" them later.
+w = boot();
+card(w, 'ring-dip').querySelector('[data-act="toggle-info"]').click();
+check('an open details panel is NOT persisted, on purpose',
+  $$(boot({ stored: stored(w) }), '.ex-info').filter((e) => !e.hidden).length, 0);
 
 // ---------------------------------------------------------------- //
 section('Settings');

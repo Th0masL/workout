@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const local = readdirSync(join(root, 'images'))
-  .filter((f) => /\.(gif|jpe?g|png|webp)$/i.test(f))
+  .filter((f) => /\.(gif|svg|jpe?g|png|webp)$/i.test(f))
   .sort();
 
 const hotlinks = [...new Set(

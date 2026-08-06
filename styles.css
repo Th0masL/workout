@@ -794,3 +794,61 @@ select:focus { outline: none; border-color: var(--accent); }
   color: var(--warn, #f5a524);
   border: 1px solid color-mix(in srgb, var(--warn, #f5a524) 35%, transparent);
 }
+
+/* ---------------------------------------------------------------- */
+/* One set at a time                                                 */
+/* ---------------------------------------------------------------- */
+
+/* Sets are logged in order, so only one row at a time has a live button. A
+ * mis-tap on the wrong row used to record a set you had not done, at numbers
+ * meant for later, with a tick appearing in the wrong place as the only clue. */
+.set-row--waiting { opacity: 0.55; }
+.btn--waiting {
+  opacity: 0.35;
+  pointer-events: none;
+  filter: saturate(0.3);
+}
+
+/* A whole exercise dropped for today. */
+.skip-btn {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.skip-btn:active { background: #ffffff10; }
+.ex-card--off { opacity: 0.55; }
+.ex-card--off .ex-target b { text-decoration: line-through; }
+.ex-card--off .skip-btn { color: var(--warn); opacity: 1; }
+
+/* Correcting the app's idea of where you are. Lives with the ladder, because
+ * that is the thing it moves you along. */
+.lvl-set {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+.lvl-set-label { font-size: 0.8rem; font-weight: 600; color: var(--fg); }
+.lvl-set-val {
+  min-width: 3.4rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+}
+.lvl-set-hint {
+  flex: 1 1 100%;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.lvl-set .step[disabled] { opacity: 0.3; pointer-events: none; }

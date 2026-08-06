@@ -48,7 +48,7 @@ jobs:
           cp app.js progression.js patch.js audio.js sw.js _site/
           cp data/images.js data/program.js _site/data/
           cp icons/*.png _site/icons/
-          cp images/*.gif images/*.jpg _site/images/
+          cp images/*.gif images/*.svg _site/images/
 
       # Cache-busting, done the way THIS app is built.
       #

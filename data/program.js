@@ -50,12 +50,14 @@ window.PROGRAM = {
    * order the rings physically travel: overhead, then chest, then they stay
    * there. Two adjustments per session, both downward, never back up.
    *
-   * The rings bottom out at 80 cm, too high for a leg curl done off the floor
-   * (that wants ~25 cm). The fix is to raise the BODY instead: shoulders on the
-   * 45 cm chair puts the shoulder joint at ~55 cm, so heels at 80 cm give the
-   * same ~10 degree body angle as the floor version. Day B therefore has three
-   * adjustments, day A two. Both stay downward-only. */
-  stationOrder: ["rings-full", "rings-chest", "rings-low", "floor"],
+   * The straps reach the floor, so the leg curl is done lying flat with the
+   * heels in the rings at 20-25 cm — no chair, no compromise. It is the only
+   * exercise that needs the rings that low, which is why day B pays for a third
+   * adjustment and day A only needs two. Both stay downward-only.
+   *
+   * (An earlier strap stopped at 80 cm and the leg curl had to be done with the
+   * shoulders up on the 45 cm chair to get the same body angle. That is gone.) */
+  stationOrder: ["rings-full", "rings-chest", "rings-dip", "rings-low", "floor"],
 
   stations: {
     "rings-full": {
@@ -70,6 +72,18 @@ window.PROGRAM = {
       icon: "↔️",
       setup:
         "Drop the rings to STERNUM height, then check it against the dip: at the BOTTOM of a dip, knees bent, your feet must still clear the floor. Raise them a little if they do not. Only adjustment left in the session.",
+      adjust: true,
+    },
+    "rings-dip": {
+      label: "Rings for seated dips",
+      icon: "🔻",
+      setup:
+        "Only while you still need help with the dips. Sit on the floor between the rings with your legs " +
+        "straight out in front, and set them to about SHOULDER HEIGHT WHILE SEATED — roughly 60 cm. " +
+        "Check it by sitting down: with your backside on the floor your hands should be level with your " +
+        "shoulders and your elbows well bent. That is the bottom of the dip, and the floor is what stops " +
+        "you going too deep. Press up from there. This station disappears once you are dipping " +
+        "unassisted and the rings stay at chest height.",
       adjust: true,
     },
     "rings-low": {
@@ -425,33 +439,117 @@ window.PROGRAM = {
       kit: ["rings"],
       progression: "ladder-then-vest",
       ladder: [
+        /* Started seated, in an L. Rings at seated-shoulder height, legs
+         * straight out in front, backside on the floor: that IS the bottom of a
+         * dip, and it has three properties nothing else here had —
+         *
+         *   the floor is the depth stop, so "no deeper than parallel" enforces
+         *     itself instead of being a rule you have to remember;
+         *   the hands stay at your SIDES rather than behind you, so the shoulder
+         *     never sees the extension-plus-internal-rotation position that
+         *     makes bench dips a bad idea after a layoff;
+         *   the legs are out in front and nearly flat, so they can push a
+         *     little but cannot squat you up.
+         *
+         * The progression is the same one everybody uses for bench dips —
+         * raise the feet — except the hands are on rings, which is the whole
+         * point of owning rings. Higher heels put more of you on your arms. */
         {
-          name: "Feet on floor, heavy assist",
-          note: "Legs take a real share of the weight",
-          addCues: ["Push through the heels only as much as you need to finish the rep cleanly"],
+          name: "Seated, heels on the floor",
+          note: "Sit between the rings, legs straight out — press your hips off the floor",
+          station: "rings-dip",
+          image: "images/ring-dip.svg",
+          cues: [
+            "Sit on the floor between the rings, legs straight out in front, heels down",
+            "Hands on the rings at your SIDES — never behind you. Rings turned out",
+            "Press until the arms lock and your hips come off the floor, then lower until you touch down",
+            "Push through the heels as much as you need. Do not bend the knees to get more",
+          ],
         },
         {
-          name: "Feet on floor, light assist",
-          note: "Heels only, just for balance",
-          addCues: ["Push through the heels only as much as you need to finish the rep cleanly"],
+          name: "Seated, heels on the sofa chair",
+          note: "20 cm — more of you goes onto the arms",
+          station: "rings-dip",
+          kit: ["rings", "sofa"],
+          image: "images/ring-dip.svg",
+          cues: [
+            "Same position, heels up on the 20 cm sofa chair instead of the floor",
+            "Raising the feet shifts weight off the legs and onto the arms — that is the whole step",
+            "Legs stay straight; the heels rest, they do not press hard",
+          ],
         },
-        { name: "Bodyweight, knees tucked" },
-        { name: "Bodyweight, legs straight forward" },
+        {
+          name: "Seated, heels on the chair",
+          note: "45 cm — nearly all of you is on the arms now",
+          station: "rings-dip",
+          kit: ["rings", "chair"],
+          image: "images/ring-dip.svg",
+          cues: [
+            "Heels on the 45 cm chair. At lockout your feet are level with your hips",
+            "Almost all of your weight is on the arms; the feet are for balance",
+            "When this stops being hard, the rings go back up and the feet come off entirely",
+          ],
+        },
+        {
+          name: "Bodyweight, to parallel",
+          note: "Rings back up to chest height — feet clear, upper arm to parallel",
+          addCues: [
+            "Rings at sternum again. Knees bent, ankles crossed, feet clear for the whole set",
+            "Cannot reach parallel unassisted? Go back a level. Range is earned before load",
+          ],
+        },
+        {
+          /* Depth is the last thing earned before the vest, and it is the one
+           * step this program will not let you take early — six weeks of
+           * calendar time, not just sessions, before the shoulder sees the
+           * bottom of the range under full bodyweight. */
+          name: "Bodyweight, below parallel",
+          note: "Phase 3 only — the range itself is the progression now",
+          minPhase: 3,
+          addCues: [
+            "A centimetre or two deeper per session, not the whole range at once",
+            "The reps reset to 6 when you arrive here. A deeper dip IS a harder dip; treat it as one",
+            "Stop where the shoulder is comfortable — that is your depth, not a number someone else picked",
+            "Any pinch rather than a stretch at the bottom: back up to parallel and stay there a fortnight",
+          ],
+        },
       ],
       cues: [
+        /* This is the thing the level names never said, and the reason a
+         * partial-range unassisted dip felt like progress when it was not. */
+        "A rep counts only if the upper arm reaches PARALLEL to the floor. Higher is not a short rep, it is a different exercise",
+        "Parallel is the target AND the ceiling until the last rung opens in Phase 3 — then depth becomes the progression",
         "Rings pressed against the sides at lockout and turned out",
-        "PHASE 1-2: stop at upper-arm-parallel. No deep dips until Phase 3.",
         "Shoulders down and back the whole time — never let them shrug up at the bottom",
       ],
       why:
         "The primary vertical push and the highest-risk movement in the program. Ring dips are far more " +
         "shoulder-friendly than fixed bars because the hands can rotate, but depth is what hurts people " +
         "after a layoff — hence the depth cap for the first six weeks.",
-      caution: "Stop at upper-arm-parallel depth until Phase 3.",
+      caution:
+        "Upper arm to parallel on every rep — and no deeper until the last rung opens in Phase 3. " +
+        "Cannot reach parallel? Drop a level and use your feet.",
       note:
-        "The highest-risk movement in the program after a long layoff. Depth is what hurts shoulders, " +
-        "not load, which is why the cap is on range of motion rather than on weight. Back off at the " +
-        "first twinge rather than training through it.",
+        "DEPTH IS THE LAST RUNG, and it comes BEFORE the vest — which is what \"range before load\" has to " +
+        "mean if it means anything. Parallel is the ceiling until Phase 3, six weeks and eighteen sessions " +
+        "in; then the bottom of the range opens up a centimetre at a time and the reps reset, because a " +
+        "deeper dip is a harder dip. Only once that is owned does weight go on. Earn the level and the app " +
+        "banks it until the phase opens, so nothing is lost by the wait.\n\n" +
+        "The ladder ENDS there, and the vest takes over. Holding the legs straight " +
+        "out — an L-sit dip — is not on it, because it does not make the movement harder for the muscles " +
+        "doing the pushing: it shifts your centre of mass forward and asks for hip-flexor compression " +
+        "and balance instead. As a rung it would gate the vest on a core skill, so someone with plenty " +
+        "strong dips could stall there and never get to load them. Chase it as a skill if you want it; " +
+        "it is not the way to make dips harder.\n\n" +
+        "RANGE BEFORE LOAD. The ladder takes assistance away, but only once you can already reach depth — " +
+        "an unassisted dip that stops above parallel is not a harder version of a full one, it trains the " +
+        "top few inches and skips the part the shoulder actually needs to learn. If you cannot hit parallel " +
+        "without help, you are on level 1 or 2 no matter how strong the partial feels. Using your feet is " +
+        "not a lesser version of the exercise; it is how you buy the range.\n\n" +
+        "This is the highest-risk movement in the program after a long layoff. Depth is what hurts " +
+        "shoulders, not load, which is why the cap is on range of motion rather than on weight — and why " +
+        "the cap is a CEILING as well as a floor for the first six weeks. Back off at the first twinge " +
+        "rather than training through it.",
       warn: true,
     },
     "ring-fallout": {
@@ -487,8 +585,9 @@ window.PROGRAM = {
         "CORRECTION to the original plan, which called for a ring plank with the FEET in the rings at " +
         "chest height. That is not physically possible — feet in sternum-height rings puts you inverted. " +
         "Hands in the rings gives the same anti-extension stimulus at the height you are already standing " +
-        "at, and loads the shoulders and lats as well. A feet-in-rings version is not an option either: " +
-        "these rings stop at 80 cm.",
+        "at, and loads the shoulders and lats as well. A feet-in-rings version IS possible now that the " +
+        "straps reach the floor — it is not used because this one progresses continuously by walking the " +
+        "feet back, where switching to feet-in-rings is one huge jump with nothing in between.",
       correction: true,
     },
 
@@ -621,7 +720,7 @@ window.PROGRAM = {
             "Shoulders stay on the floor; nothing here needs a chair yet",
           ],
         },
-        { name: "Feet on the sofa chair", note: "20 cm — both legs, longer range", kit: ["sofa"], image: "https://raw.githubusercontent.com/Th0masL/exercises-dataset/main/images/3523-aWedzZX.jpg" },
+        { name: "Feet on the sofa chair", note: "20 cm — both legs, longer range", kit: ["sofa"], image: "https://raw.githubusercontent.com/Th0masL/exercises-dataset/main/videos/3523-aWedzZX.gif" },
         { name: "Shoulders on the chair", note: "45 cm — the real hip thrust, shoulder blades on the edge", kit: ["chair"] },
         {
           name: "Shoulders on the chair, one leg",

@@ -212,8 +212,8 @@
         workSeconds: work * (t.perSide ? 2 : 1),
         rest: t.rest,
         superset: ex.superset || null,
-        station: ex.station,
-        stationAdjust: !!P.stations[ex.station].adjust,
+        station: t.station,
+        stationAdjust: !!P.stations[t.station].adjust,
         trimPriority: ex.trimPriority || 0,
         minSets: ex.minSets || 1,
         fixed: ex.progression === "fixed",
@@ -273,27 +273,22 @@
   /* Session grouped into stations, in the fixed station order. */
   function sessionPlan(key) {
     var phase = currentPhase();
-    var items = workoutItems(key);
+    var resolved = workoutItems(key).map(function (o) {
+      var ex = P.exercises[o.id];
+      var e = trimmedEntry(o, key);
+      return { id: o.id, ex: ex, entry: e, target: PR.target(ex, exState(o.id), phase, e) };
+    });
     var groups = [];
     P.stationOrder.forEach(function (stKey) {
-      var inStation = items.filter(function (o) {
-        return P.exercises[o.id].station === stKey;
+      /* Grouped by the station this exercise is at TODAY. Assisted ring dips
+       * need the rings low enough to reach the floor and unassisted ones need
+       * them high enough not to, so an exercise moves between blocks as you
+       * climb its ladder — and the session order follows automatically. */
+      var inStation = resolved.filter(function (it) {
+        return it.target.station === stKey;
       });
       if (!inStation.length) return;
-      groups.push({
-        key: stKey,
-        station: P.stations[stKey],
-        items: inStation.map(function (o) {
-          var ex = P.exercises[o.id];
-          var e = trimmedEntry(o, key);
-          return {
-            id: o.id,
-            ex: ex,
-            entry: e,
-            target: PR.target(ex, exState(o.id), phase, e),
-          };
-        }),
-      });
+      groups.push({ key: stKey, station: P.stations[stKey], items: inStation });
     });
     return groups;
   }
@@ -381,6 +376,30 @@
     return n;
   }
 
+  /* Which set of this exercise is the next one you may log.
+   *
+   * You do set 1, then set 2, then set 3 — so only one row at a time is
+   * loggable. Without this a mis-tap on the wrong row records a set you have
+   * not done, at numbers that were meant for later, and the only clue is a tick
+   * appearing in the wrong place. Cut sets are stepped over; done ones are
+   * behind you. Undo reopens a row and hands the turn back to it. */
+  /* Same question, answerable before a session exists — a tap out of turn must
+   * not even start one, or the reject leaves a session running that the user
+   * never asked for. With nothing logged the turn is always the first set. */
+  function turnFor(exId) {
+    var e = state.active && state.active.entries[exId];
+    return e ? nextLoggable(e) : 0;
+  }
+
+  function nextLoggable(entry) {
+    if (!entry) return 0;
+    for (var i = 0; i < entry.sets.length; i++) {
+      var st = entry.sets[i];
+      if (!st.done && !isSkipped(st)) return i;
+    }
+    return -1;
+  }
+
   /* The floor. Cutting a main lift to a single set is not a shorter session,
    * it is a different one — so the same minimum the time-cap trimmer respects
    * applies here, and the minus stops rather than going to zero. */
@@ -440,7 +459,11 @@
         logged[id] = {
           level: levelDone,
           sets: doneSets.map(function (s) {
-            return { value: s.value, load: s.load || 0 };
+            /* `at` is kept deliberately: the gap between consecutive sets is
+             * the only record of how long you ACTUALLY rested, and without it
+             * the session-length model can never be checked against anything
+             * but a total. */
+            return { value: s.value, load: s.load || 0, at: s.at };
           }),
         };
       }
@@ -547,8 +570,8 @@
         workSeconds: work * (t.perSide ? 2 : 1),
         rest: t.rest,
         superset: ex.superset || null,
-        station: ex.station,
-        stationAdjust: !!P.stations[ex.station].adjust,
+        station: t.station,
+        stationAdjust: !!P.stations[t.station].adjust,
       };
     });
     return PR.timeline(items, TIME_OPTS);
@@ -1271,6 +1294,14 @@
     );
   }
 
+  /* Sets already logged this session pin the level: finishSession records the
+   * level at finish time, so moving it after logging would file those sets
+   * under a rung they were not done at. */
+  function levelPinned(id) {
+    var e = state.active && state.active.entries[id];
+    return !!(e && e.sets.some(function (st) { return st.done; }));
+  }
+
   /* The ladder, with anything a rung changes about the prescription shown ON
    * the rung. A level that is per-side, or that carries its own rep range, is a
    * materially different exercise — leaving that invisible until you reach it
@@ -1280,6 +1311,7 @@
     ex.ladder.forEach(function (l, i) {
       var r = PR.rung(ex, i);
       var tags = "";
+      if (r.minPhase) tags += '<span class="rung-tag">Phase ' + r.minPhase + "</span>";
       if (r.perSide) tags += '<span class="rung-tag">per side</span>';
       if (r.own.cues) tags += '<span class="rung-tag">own cues</span>';
       if (r.own.range) {
@@ -1358,11 +1390,15 @@
       { vest: null, sets: Array.apply(null, Array(t.sets)).map(plannedSet) };
     var vest = entryVest(it.id, t);
 
+    var doing = liveSets(it.id, t.sets);
+    var allSkipped = doing === 0;
+
     var h =
       '<div class="ex-card' +
       (ex.warn ? " ex-card--warn" : "") +
       (isPrep ? " ex-card--prep" : "") +
       (isNow ? " ex-card--now" : "") +
+      (allSkipped ? " ex-card--off" : "") +
       '" data-ex="' + it.id + '">';
 
     h +=
@@ -1374,10 +1410,16 @@
       (pair ? ' <span class="tag tag-ss">⇄ ' + esc(pair.partners) + "</span>" : "") +
       (t.offset ? ' <span class="tag tag-off">one level harder</span>' : "") +
       "</div>" +
+      '<button class="skip-btn" data-act="skip-exercise" title="' +
+      (allSkipped ? "Put this exercise back" : "Not doing this exercise today") +
+      '" aria-label="' +
+      (allSkipped ? "Put this exercise back" : "Skip this exercise") +
+      '">' +
+      (allSkipped ? "↺" : "⊘") +
+      "</button>" +
       '<button class="info-btn" data-act="toggle-info" aria-label="Details">ⓘ</button>' +
       "</div>";
 
-    var doing = liveSets(it.id, t.sets);
     h +=
       '<div class="ex-target">' +
       "<b>" +
@@ -1408,6 +1450,15 @@
     }
     /* The amber stripe down the card means nothing on its own — say why. */
     if (ex.caution) h += '<div class="ex-caution">⚠ ' + esc(ex.caution) + "</div>";
+    /* A ladder that appears to stop is worse than one that says why. */
+    if (t.nextGate) {
+      h +=
+        '<div class="ex-levelnote">Next up — <strong>' +
+        esc(t.nextGate.name) +
+        "</strong> — opens in Phase " +
+        t.nextGate.phase +
+        ". Earn it before then and it is banked.</div>";
+    }
 
     var kit = kitFor(t);
     h +=
@@ -1442,9 +1493,11 @@
 
     h += '<div class="sets">';
     var held = activeHold() && activeHold().id === it.id ? activeHold() : null;
+    var turn = nextLoggable(entry);
     entry.sets.forEach(function (s, i) {
       /* Anything the user has not overridden is read from the plan here, so a
        * cap or phase change updates the sets still ahead of them. */
+      var myTurn = i === turn;
       var sVal = setValue(s, t);
       var sLoad = setLoad(s, it.id, t);
       var isHeld = held && held.set === i;
@@ -1452,6 +1505,7 @@
         '<div class="set-row' +
         (s.done ? " set-row--done" : "") +
         (isSkipped(s) ? " set-row--skipped" : "") +
+        (!s.done && !isSkipped(s) && !myTurn ? " set-row--waiting" : "") +
         (isHeld ? " set-row--holding" : "") +
         (isNow && here.set === i && !s.done ? " set-row--next" : "") +
         (s.extra && !s.done ? " set-row--extra" : "") +
@@ -1490,6 +1544,10 @@
             " s</small></span>" +
             '<button class="btn btn-stop" data-act="stop-hold">Stop</button>';
       } else if (t.metric === "seconds") {
+        /* Two ways to finish a hold: run the clock, or write down what you did.
+         * Without the second one a mistimed hold could never be corrected —
+         * undo put the row back but Start was the only way out of it, and that
+         * means re-hanging for thirty seconds to fix a typo. */
         h +=
           removeOrMinus(s, sVal, t.step, it.id, t.sets) +
           '<span class="set-val">' +
@@ -1498,7 +1556,18 @@
           u +
           "</small></span>" +
           '<button class="step" data-act="rep-inc">+</button>' +
-          '<button class="btn btn-start" data-act="start-hold">Start</button>';
+          '<button class="btn btn-start' +
+          (myTurn ? "" : " btn--waiting") +
+          '" data-act="start-hold"' +
+          (myTurn ? "" : " disabled") +
+          ">Start</button>" +
+          '<button class="btn btn-done' +
+          (myTurn ? "" : " btn--waiting") +
+          '" data-act="log-set" title="Log ' +
+          sVal +
+          ' s without running the clock"' +
+          (myTurn ? "" : " disabled") +
+          ">✓</button>";
       } else {
         h +=
           removeOrMinus(s, sVal, t.step, it.id, t.sets) +
@@ -1508,7 +1577,11 @@
           u +
           "</small></span>" +
           '<button class="step" data-act="rep-inc">+</button>' +
-          '<button class="btn btn-done" data-act="log-set">✓</button>';
+          '<button class="btn btn-done' +
+          (myTurn ? "" : " btn--waiting") +
+          '" data-act="log-set"' +
+          (myTurn ? "" : " disabled") +
+          ">✓</button>";
       }
       h += "</div>";
 
@@ -1546,6 +1619,33 @@
     h += "</ul>";
     h += '<p class="why"><strong>Why:</strong> ' + esc(ex.why) + "</p>";
     if (ex.note) h += '<p class="why note">' + esc(ex.note) + "</p>";
+    /* The app's idea of where you are can be wrong — a ladder gets rewritten, or
+     * you come back from a break, or it simply started you in the wrong place.
+     * Until this existed the only remedies were resetting all sixteen exercises
+     * or editing the exported JSON by hand. */
+    if (ex.ladder.length > 1) {
+      var pinned = levelPinned(it.id);
+      h +=
+        '<div class="lvl-set">' +
+        '<span class="lvl-set-label">Your level</span>' +
+        '<button class="step" data-act="level-dec"' +
+        (pinned || t.level === 0 ? " disabled" : "") +
+        ' aria-label="One level easier">−</button>' +
+        '<span class="lvl-set-val">' +
+        (t.level + 1) +
+        " / " +
+        ex.ladder.length +
+        "</span>" +
+        '<button class="step" data-act="level-inc"' +
+        (pinned || t.level === ex.ladder.length - 1 ? " disabled" : "") +
+        ' aria-label="One level harder">+</button>' +
+        '<span class="lvl-set-hint">' +
+        (pinned
+          ? "locked — sets already logged today"
+          : "move it if the app has you in the wrong place; the reps reset to that level\u2019s range") +
+        "</span>" +
+        "</div>";
+    }
     h += ladderHtml(ex, t.level);
     h +=
       '<p class="why muted">Rest ' +
@@ -2196,7 +2296,14 @@
       case "start":
         cues.prime();
         startSession();
-        say("Workout " + state.active.workout + ". " + P.stations[sessionPlan(state.active.workout)[0].key].label);
+        var first = currentPosition();
+        say(
+          "Workout " +
+            state.active.workout +
+            ". " +
+            P.stations[sessionPlan(state.active.workout)[0].key].label +
+            (first ? ". " + announce(first.id, first.set) : "")
+        );
         return;
       case "finish":
         finishSession();
@@ -2232,7 +2339,7 @@
           btn.dataset.restname || "Rest",
           /* A wait you started by hand ends the same way as one that started by
            * itself — it is the same wait, and you need the same thing said. */
-          nid && P.exercises[nid] ? P.exercises[nid].name + ", set " + (nset + 1) : "",
+          nid && P.exercises[nid] ? announce(nid, nset) : "",
           nid ? { id: nid, set: nset } : null
         );
         return;
@@ -2304,6 +2411,26 @@
         render();
         return;
       }
+      case "level-dec":
+      case "level-inc": {
+        if (levelPinned(exId)) return;
+        var lex = P.exercises[exId];
+        var lst = exState(exId);
+        var want = lst.level + (act === "level-inc" ? 1 : -1);
+        var lvl = Math.max(0, Math.min(PR.maxLevel(lex), want));
+        if (lvl === lst.level) return;
+        /* A level you set by hand is a fresh start on that rung: the reps go to
+         * the bottom of ITS range, and streaks earned somewhere else do not
+         * follow you there. */
+        lst.level = lvl;
+        lst.target = PR.rung(lex, lvl).range[0];
+        lst.topOutStreak = 0;
+        lst.failStreak = 0;
+        state.exerciseState[exId] = lst;
+        save();
+        render();
+        return;
+      }
       case "vest-dec":
       case "vest-inc": {
         autoStart();
@@ -2320,6 +2447,7 @@
         return;
       }
       case "start-hold": {
+        if (turnFor(exId) !== setIdx) return; // not this set's turn
         autoStart();
         cues.prime();
         commitHold(); // a hold already running is logged, not discarded
@@ -2358,11 +2486,15 @@
         return;
       }
       case "log-set": {
+        if (turnFor(exId) !== setIdx) return; // not this set's turn
         autoStart();
         cues.prime();
         var e3 = ensureEntry(entryFor(exId));
         var set = e3 && e3.sets[setIdx];
         if (!set) { render(); return; }
+        /* Logging a TIMED set by hand — no clock was run, so a hold left over
+         * from a previous tap must not attach itself to this row. */
+        if (activeHold() && activeHold().id === exId) commitHold();
         var t3 = targetFor(exId);
         /* Freeze both: from here this row is a record of what happened. */
         set.value = setValue(set, t3);
@@ -2386,6 +2518,24 @@
         /* A hold's value was written by the clock, not by the user, so undo
          * hands it back to the plan. A rep count you typed is yours to keep. */
         if (targetFor(exId).metric === "seconds") s4.value = null;
+        save();
+        render();
+        return;
+      }
+      case "skip-exercise": {
+        /* Cutting every set one tap at a time works but is absurd when the
+         * answer is "not today". This ignores the minSets floor on purpose:
+         * that floor exists to stop an exercise being DEGRADED to one set, and
+         * dropping it entirely is a different decision. */
+        autoStart();
+        var e6 = ensureEntry(entryFor(exId));
+        var anyLeft = e6.sets.some(function (st) {
+          return !st.done && !isSkipped(st);
+        });
+        e6.sets.forEach(function (st) {
+          if (st.done) return;
+          st.value = anyLeft ? 0 : null; // restore to the plan when un-skipping
+        });
         save();
         render();
         return;
@@ -2495,6 +2645,31 @@
     return found ? trimmedEntry(found, key) : { id: exId };
   }
 
+  /* What to say about a set that is coming up: the exercise, which set, and
+   * the numbers. Without the numbers you have to pick the phone up off the
+   * floor to find out what you were told to do, which is the one thing the
+   * announcement exists to save you. */
+  function announce(id, setIdx) {
+    var ex = P.exercises[id];
+    var t = targetFor(id);
+    var e = state.active && state.active.entries[id];
+    var st = e && e.sets[setIdx];
+    var value = st ? setValue(st, t) : t.value;
+    var units = t.metric === "seconds" ? " seconds" : value === 1 ? " rep" : " reps";
+    return (
+      ex.name +
+      ", set " +
+      (setIdx + 1) +
+      ", " +
+      value +
+      units +
+      (t.perSide ? " per side" : "") +
+      /* The vest only gets a mention when it is on — "bodyweight" every time
+       * would be noise on an exercise that never carries it. */
+      (t.vest ? ", " + trimNum(t.vest) + " kilos" : "")
+    );
+  }
+
   /* Start the right rest (or none) for whatever comes next. Both the decision
    * and the interval come from nextUp, so a rest can never be started for a
    * gap the timeline says has none. */
@@ -2505,14 +2680,14 @@
     if (n.kind === "partner") {
       /* Straight over — the pairing exists so one rest covers both. */
       stopRest();
-      say(name + " now");
+      say(announce(n.id, n.set) + ", now");
       return;
     }
     var label = n.kind === "exercise" ? "Next: " + name : name;
     startRest(
       n.rest || restFor(exId, state.active.workout),
       label,
-      name + ", set " + (n.set + 1),
+      announce(n.id, n.set),
       { id: n.id, set: n.set }
     );
   }

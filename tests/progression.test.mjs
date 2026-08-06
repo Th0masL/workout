@@ -109,15 +109,83 @@ for (const [key, w] of Object.entries(P.workouts)) {
     stationsHit.join('>'), stationsHit.slice().sort(
       (a, b) => P.stationOrder.indexOf(a) - P.stationOrder.indexOf(b)).join('>'));
 }
-// Day A must stay at two adjustments; only day B pays for the leg curl.
-const adjFor = k => P.stationOrder.filter(s => P.stations[s].adjust &&
-  P.workouts[k].order.some(o => P.exercises[o.id].station === s)).length;
-check('pull day needs 2 ring adjustments', adjFor('A'), 2);
-check('push day needs 3, for the leg curl', adjFor('B'), 3);
-// The rings bottom out at 80 cm, so the low station is the lowest that exists.
+// The station is a per-LEVEL property now — assisted ring dips need the rings
+// low enough to reach the floor — so the adjustment count depends on where you
+// are, and asserting it statically would assert something untrue.
+const adjAt = (k, dipLevel) => P.stationOrder.filter(s => P.stations[s].adjust &&
+  P.workouts[k].order.some(o => {
+    const e = P.exercises[o.id];
+    return (o.id === 'ring-dip' ? PR.rung(e, dipLevel).station : e.station) === s;
+  })).length;
+const topDip = P.exercises['ring-dip'].ladder.length - 1;
+check('once dipping unassisted, the pull day is back to 2 adjustments', adjAt('A', topDip), 2);
+check('and the push day to 3, for the leg curl', adjAt('B', topDip), 3);
+// While you still need the legs, the rings have to come down for the dip and
+// that costs one more move. It is a real cost, and it goes away by itself.
+check('while assisted, each day pays one extra', [adjAt('A', 0), adjAt('B', 0)], [3, 4]);
+check('and the extra one is the dip station',
+  P.exercises['ring-dip'].ladder.filter(l => l.station === 'rings-dip').length, 3);
+// The assisted levels all start SEATED, which is what makes the floor the depth
+// stop — "no deeper than parallel" enforces itself instead of being a rule.
+check('every assisted level starts seated',
+  P.exercises['ring-dip'].ladder.filter(l => l.station === 'rings-dip')
+    .filter(l => !/^Seated,/.test(l.name)), []);
+// The ladder ends with DEPTH, and depth comes before the vest — which is what
+// "range before load" has to mean if it means anything.
+const dip = P.exercises['ring-dip'];
+check('the last rung is the deeper range, not more weight',
+  dip.ladder.map(l => l.name).slice(-1), ['Bodyweight, below parallel']);
+check('and nothing on the ladder is an L-sit',
+  dip.ladder.filter(l => /L-sit/.test(l.name)), []);
+check('the reason it is not is written where it will be found',
+  /L-sit/.test(dip.note), true);
+
+// That rung is held shut until Phase 3 — six weeks of calendar time, not just
+// sessions, before the shoulder sees the bottom of the range at bodyweight.
+check('the depth rung is gated on Phase 3', PR.rung(dip, 4).minPhase, 3);
+check('and it is the only gated rung in the program',
+  Object.entries(P.exercises).flatMap(([id, e]) =>
+    e.ladder.map((_, i) => [id, i, PR.rung(e, i).minPhase]).filter(([, , m]) => m)
+      .map(([k, i]) => k + ':L' + (i + 1))),
+  ['ring-dip:L5']);
+
+const atTop = { level: 3, vest: 0, target: 8, topOutStreak: 1, failStreak: 0 };
+const held = run(dip, atTop, sets(3, 8), PHASE2);
+check('topping out in Phase 2 holds you at parallel', held.state.level, 3);
+check('and does NOT skip ahead to the vest', held.state.vest, 0);
+check('saying what is waiting and when', /opens in Phase 3/.test(held.events[0].text), true);
+check('but the promotion is banked', held.state.topOutStreak, P.rules.topOutSessions);
+const opened = run(dip, held.state, sets(3, 8), PHASE3);
+check('and cashes in the moment Phase 3 arrives', opened.state.level, 4);
+check('with the reps reset, because a deeper dip is a harder dip', opened.state.target, 6);
+check('only THEN does the vest come on',
+  run(dip, { level: 4, vest: 0, target: 8, topOutStreak: 1, failStreak: 0 }, sets(3, 8), PHASE3)
+    .state.vest, P.rules.vestFirstKg);
+// The card has to be able to say why the ladder appears to stop.
+check('target() names the gate it is waiting on',
+  PR.target(dip, { level: 3, vest: 0, target: 8 }, PHASE2, null).nextGate,
+  { name: 'Bodyweight, below parallel', phase: 3 });
+check('and stops mentioning it once open',
+  PR.target(dip, { level: 3, vest: 0, target: 8 }, PHASE3, null).nextGate, null);
+// Hands at your SIDES, never behind you: that is the whole reason this is on
+// rings rather than on a chair, and it is what keeps the shoulder out of
+// extension-plus-internal-rotation.
+check('and says so, on the level you meet first',
+  /at your SIDES/.test(PR.rung(P.exercises['ring-dip'], 0).cues.join(' ')), true);
+// The progression is raising the heels, so each step names its platform.
+check('the assist steps up through the two chairs',
+  P.exercises['ring-dip'].ladder.slice(0, 3).map(l => (l.kit || []).join('+')),
+  ['', 'rings+sofa', 'rings+chair']);
+// Nothing but the leg curl needs the rings at their very lowest.
 check('only the leg curl uses the low station',
   Object.entries(P.exercises).filter(([, e]) => e.station === 'rings-low').map(([k]) => k),
   ['ring-leg-curl']);
+// Every station a level names has to exist and sit in the order.
+check('every level station is a real one, in stationOrder',
+  Object.entries(P.exercises).flatMap(([id, e]) => e.ladder
+    .map((_, i) => PR.rung(e, i).station)
+    .filter(st => !P.stations[st] || P.stationOrder.indexOf(st) < 0)
+    .map(st => id + ':' + st)), []);
 
 // ---------------------------------------------------------------- //
 section('Installable app shell');
@@ -141,7 +209,7 @@ check('the apple-touch-icon file exists', existsSync(join(root, 'icons/icon-180.
 const imagesJs = readFileSync(join(root, 'data', 'images.js'), 'utf8');
 const declared = [...imagesJs.matchAll(/^    "([^"]+)",$/gm)].map(m => m[1]);
 const filesOnDisk = readdirSync(join(root, 'images'))
-  .filter(f => /\.(gif|jpe?g|png|webp)$/i.test(f)).sort();
+  .filter(f => /\.(gif|svg|jpe?g|png|webp)$/i.test(f)).sort();
 check('data/images.js lists exactly what is in images/', declared, filesOnDisk);
 check('and says how to regenerate it', /tools\/gen-images\.mjs/.test(imagesJs), true);
 check('and works in a worker as well as the page', /typeof self/.test(imagesJs), true);
@@ -710,15 +778,19 @@ section('Illustrations resolve in one place');
 
 check('an explicit level picture wins outright, with no fallback',
   PR.imageCandidates('hip-thrust', P.exercises['hip-thrust'], 1).length, 1);
+// .svg is in the chain because some things are geometry, not movement — the
+// ring-dip set-up needed a drawn diagram, not a clip of someone doing it.
 check('a level with no picture falls back level-first, then exercise',
   PR.imageCandidates('split-squat', P.exercises['split-squat'], 1),
-  ['images/split-squat-L2.gif', 'images/split-squat-L2.jpg',
-   'images/split-squat.gif', 'images/split-squat.jpg']);
+  ['images/split-squat-L2.gif', 'images/split-squat-L2.svg', 'images/split-squat-L2.jpg',
+   'images/split-squat.gif', 'images/split-squat.svg', 'images/split-squat.jpg']);
 check('a level may point at another level\u2019s file',
   PR.imageCandidates('split-squat', P.exercises['split-squat'], 2), ['images/split-squat-L4.gif']);
-check('an exercise-wide picture covers every level',
-  [0, 2].map(l => PR.imageCandidates('ring-dip', P.exercises['ring-dip'], l)[0]),
+check('an exercise-wide picture covers the levels that do not override it',
+  [3, 4].map(l => PR.imageCandidates('ring-dip', P.exercises['ring-dip'], l)[0]),
   [P.exercises['ring-dip'].image, P.exercises['ring-dip'].image]);
+check('while a level that names its own wins',
+  PR.imageCandidates('ring-dip', P.exercises['ring-dip'], 0), ['images/ring-dip.svg']);
 check('ids are URL-encoded, never interpolated raw',
   PR.imageCandidates('a b/c', { ladder: [{}], range: [1, 1] }, 0)[0], 'images/a%20b%2Fc-L1.gif');
 // Given the generated manifest, only files that exist are ever named — the
@@ -732,7 +804,7 @@ check('an exercise with nothing on disk asks for nothing',
 check('an explicit URL ignores the manifest entirely',
   PR.imageCandidates('ring-dip', P.exercises['ring-dip'], 0, HAVE).length, 1);
 check('no manifest falls back to probing, as before',
-  PR.imageCandidates('split-squat', P.exercises['split-squat'], 1, null).length, 4);
+  PR.imageCandidates('split-squat', P.exercises['split-squat'], 1, null).length, 6);
 // Every candidate ends up inside a single-quoted JS array in an onerror
 // attribute. A quote in one of them would close it and kill the whole chain.
 check('no candidate contains a quote that would break the fallback chain',

@@ -139,6 +139,43 @@ carry borders, so grouping is done with type and space instead of nesting boxes.
 `2 / 4` counter, and the stations needing a ring adjustment are picked out in blue, since those are
 the only points in a session where you touch the hardware.
 
+### One set at a time
+
+Within an exercise, only the set whose turn it is has a live button; the rest are dimmed and
+disabled. Reported from real use — a mis-tap on the wrong row records a set you have not done, at
+numbers meant for later, and a tick appearing in the wrong place is the only clue.
+
+The `disabled` attribute is a hint, not a guarantee — the delegated click handler never sees it —
+so the handlers check the turn as well, and an out-of-turn tap does not even start a session. Undo
+hands the turn back to the row it reopened; a cut set is stepped over rather than blocking the ones
+behind it.
+
+### Two ways to finish a hold
+
+Timed exercises carry **Start** *and* a **✓**. Start runs the clock; the tick logs the number shown
+without running anything. Without the second one a mistimed hold could never be corrected — undo
+put the row back, but Start was the only way out of it, which means hanging for another thirty
+seconds to fix a miscount. The round trip is: undo → adjust with −/+ → ✓.
+
+### Skipping a whole exercise
+
+The ⊘ on a card drops every set it has left, and ↺ puts them back. Cutting them one tap at a time
+works but is absurd when the answer is "not today" — and `minSets` makes it impossible anyway.
+This ignores that floor deliberately: the floor exists to stop an exercise being *degraded* to one
+set, and dropping it entirely is a different decision. Sets already logged are kept.
+
+### Correcting the level by hand
+
+The ⓘ panel carries a **Your level  −  3 / 5  +** stepper. The app's idea of where you are can be
+wrong — a ladder gets rewritten, you come back from a break, or it simply started you in the wrong
+place — and until this existed the only remedies were resetting all sixteen exercises or editing
+the exported JSON.
+
+A level set by hand is a fresh start on that rung: the reps go to the bottom of *its* range and
+streaks earned elsewhere do not follow you there. It locks once you have logged a set of that
+exercise today, because the session files those sets under the level as it stands at the end, and
+moving it afterwards would mislabel the history.
+
 ### Where you are
 
 One card is marked **now** — a green edge, a `NOW` chip, and the one set to do
@@ -268,11 +305,16 @@ What it says:
 |---|---|
 | Session start | *"Workout A. Rings overhead"* |
 | 10 s left of a rest over 25 s | *"Ten seconds"* |
-| Rest ends | *"Ring dips, set 2"* — the exercise and which set is next |
-| Mid-superset, no rest due | *"Ring face pulls now"* |
+| Rest ends | *"Ring dips, set 2, 6 reps"* — and *", 2 kilos"* if the vest is on |
+| Mid-superset, no rest due | *"Ring face pulls, set 1, 12 reps, now"* |
 | Hold count-in | *"Get ready"*, then *"Go"* |
 | Every 10 s of a hold | *"10"*, *"20"*, *"30"* … past the target until you stop |
 | Hold target reached | *"Twenty seconds"* |
+
+The announcement carries the **numbers**, not just the name — reps or seconds, *per side* where the
+level is unilateral, and the vest weight only when there is one. Without them you have to pick the
+phone up off the floor to find out what you were just told to do, which is the thing the
+announcement exists to save you.
 
 The beep still fires first in speak mode: the tone gets your attention, the words tell you what.
 That matters most on the rings, where your hands are busy and the phone is on the floor.
@@ -355,6 +397,74 @@ because their source sends no CORS header, which would either block the image or
 uncacheable, and three (**ring face pull**, **ring pull-ups**, **dead hang**) because they replaced
 approximations — a cable machine and two fixed bars — with the movement performed on straps and
 rings. 468 KB for the five, all resampled from clips ten times that size.
+
+### The ring height is a property of the LEVEL
+
+Ring dips are the case that forced this. In a locked-out ring support your hands sit at your hips,
+so your **hips are at ring height** — and therefore:
+
+| rings at | feet reach the floor? | feet clear it at the bottom? |
+|---|---|---|
+| sternum, 135 cm | no — they hang 40 cm up | yes |
+| mid-thigh, ~75 cm | yes, heels ~35 cm in front | no |
+
+The two windows do not overlap, so no single height serves both. The assisted levels hang the
+rings low and the unassisted ones hang them high, and `station` is carried by the rung rather than
+the exercise. The session groups by whatever station each exercise is at *today*, so the dip moves
+between blocks on its own as you climb, and the extra ring adjustment it costs disappears by
+itself once you no longer need the legs.
+
+That also killed an earlier fix of mine that put the feet on a 45 cm chair with the rings still at
+sternum: the vertical drop is 90 cm against a 93 cm leg, so the chair would have to stand directly
+under your hips, where your body is.
+
+The harder problem turned out to be making the help **small and controllable**, not making it
+large — two earlier attempts of mine failed on exactly that. Feet flat with the knees bent is a
+squat with your hands on rings: 99% of the leg's push goes straight up and there is no way to feel
+how much you are giving.
+
+What works is starting **seated**. Rings at seated-shoulder height, legs straight out in front,
+backside on the floor — that *is* the bottom of a dip, and it has three properties nothing else
+had:
+
+- **the floor is the depth stop**, so "no deeper than parallel" enforces itself rather than being
+  a rule you have to remember mid-set;
+- **the hands stay at your sides**, so the shoulder never sees the extension-plus-internal-rotation
+  position that makes bench dips a bad idea after a layoff — which is the whole reason for owning
+  rings rather than using a chair;
+- **the legs are out in front and nearly flat**, so they can push a little but cannot squat you up.
+
+The progression is the one everybody uses for bench dips — raise the heels, floor → 20 cm sofa →
+45 cm chair — except the hands are on rings. Then the rings go back up, the feet come off, and the
+**vest takes over from there**.
+
+### Depth is a rung, and it comes before the vest
+
+"Range before load" was the exercise's stated rule and the ladder broke it: the vest arrived while
+you were still capped at upper-arm parallel. There was no path from *"stop at parallel"* to
+anything deeper — just a permission slip in the Phase 3 notes.
+
+Depth is now the **last rung**, and a rung can carry `minPhase`. Top out at parallel in Phase 2 and
+the app holds you there, **banks the promotion**, and says what it is waiting for:
+
+> Next up — **Bodyweight, below parallel** — opens in Phase 3. Earn it before then and it is banked.
+
+The moment Phase 3 opens (18 sessions **and** 6 weeks) it cashes in, the reps reset to the bottom
+of the range because a deeper dip is a harder dip, and the depth goes on a centimetre or two per
+session. Only once that is owned does weight go on. It is the only gated rung in the program, and
+a test asserts that.
+
+The ladder deliberately **stops there**. An L-sit dip was on it briefly and came off:
+holding the legs straight does not make the movement harder for the muscles doing the pushing, it
+asks for hip-flexor compression and balance instead. As a rung it would have gated the *vest* on a
+core skill, so someone with plenty strong dips could stall there and never get to load them.
+
+Where the thing that needs explaining is **geometry rather than movement**, the illustration is a
+drawn diagram instead of a clip. Ring dips are the case: the rings sit at sternum height, so in a
+locked-out support your feet hang about 40 cm off the floor and no amount of standing on it assists
+anything — the help has to come from a chair placed *in front* of you. `images/ring-dip.svg` shows
+the ring height, where the feet can actually reach, and what upper-arm-parallel looks like. `.svg`
+is in the resolver's chain alongside `.gif` and `.jpg`.
 
 **Every exercise and every ladder level is illustrated except one**, and the levels that differ
 enough to be separate exercises carry their own picture rather than sharing one that only matches a
@@ -461,9 +571,20 @@ A **Time today** control on the Today tab caps the session at 30, 40 or 50 minut
 full. It is a per-session choice you can change on the spot, and it persists.
 
 The estimate is arithmetic: work + a rest after every round + a transition per exercise + one ring
-adjustment each. Rest dominates, which is why supersets matter — members of a group share one rest
-per round instead of taking one each, so pairing two 3-set exercises saves three rests outright.
-Real sessions run 10-15% longer than the number shown; nothing accounts for filling a water bottle.
+adjustment each. Rest dominates — about 60% of the total — which is why supersets matter: members of
+a group share one rest per round instead of taking one each, so pairing two 3-set exercises saves
+three rests outright.
+
+Checked against two real sessions, comparing like for like (the model run over what was *actually*
+done, not the full plan), it came out **6% and 2% high**:
+
+| | sets | model | actual |
+|---|---|---|---|
+| Workout A | 23 | 45:03 | 42:23 |
+| Workout B | 18 | 38:32 | 37:35 |
+
+Close enough to plan around. This paragraph used to claim real sessions run 10-15% *longer*, which
+was a guess, and wrong in both direction and size.
 
 Trimming shaves **one set at a time off the least important exercise still above its floor**, so
 cuts get spread rather than gutting one movement. Every exercise carries a `trimPriority` (calves
@@ -708,6 +829,17 @@ tests/all.mjs                 runs all five
 ```
 
 ### Testing
+
+There are **32 hand-written `save()` calls**. Rather than trust all of them, the suite asserts the
+property instead: after any action, booting a second app from nothing but what reached storage has
+to show the same thing. Sixteen actions go through it — logging, undoing, cutting, skipping,
+capping, picking the workout, moving a level, typing the note, finishing — plus the settings, plus
+the two things that are deliberately *not* persisted.
+
+It reports when a case is vacuous, which caught three of them the first time round: the snapshot
+was not looking at what the action changed. Verified by deleting one `save()` — it fails with
+`note: ""` against `note: "left shoulder fine"`.
+
 
 Run them with `node tests/all.mjs`. No install step: every script `index.html` loads is run
 verbatim in a VM context against a minimal document, so there is no second copy of anything to
