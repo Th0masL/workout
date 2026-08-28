@@ -15,6 +15,7 @@
     "hip-thrust-L3.gif",
     "hip-thrust-L4.gif",
     "pike-pushup.gif",
+    "plank.svg",
     "pushup.gif",
     "ring-dip.svg",
     "ring-facepull.gif",

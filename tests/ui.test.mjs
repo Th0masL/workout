@@ -106,7 +106,48 @@ for (const t of ['history', 'program', 'data', 'today']) {
   noThrow(`the ${t} tab renders`, () => tab(w, t));
   check(`and the ${t} view has content`, $(w, '#view-' + t).innerHTML.length > 200, true);
 }
+tab(w, 'program');
+check('the program carries a visible health warning',
+  /not medical advice/.test($(w, '#view-program').textContent), true);
 tab(w, 'today');
+
+// ---------------------------------------------------------------- //
+section('Keyboard and screen-reader semantics');
+
+check('tabs name the panel they control',
+  $$(w, '.tab').map(t => t.getAttribute('aria-controls')),
+  ['view-today', 'view-history', 'view-program', 'view-data']);
+check('panels point back to their tabs',
+  ['today', 'history', 'program', 'data'].map(t => $(w, '#view-' + t).getAttribute('aria-labelledby')),
+  ['tab-today', 'tab-history', 'tab-program', 'tab-data']);
+check('only the selected tab is in the tab order',
+  $$(w, '.tab').map(t => t.getAttribute('tabindex')), ['0', '-1', '-1', '-1']);
+const movedTab = $(w, '#tab-today').keydown('ArrowRight');
+check('arrow keys select the next tab', $(w, '#tab-history').getAttribute('aria-selected'), 'true');
+check('and move keyboard focus with it', w.document.activeElement.id, 'tab-history');
+check('the arrow key does not scroll the page', movedTab.defaultPrevented, true);
+tab(w, 'today');
+
+check('every picker exposes its selected state',
+  $$(w, '.pick-btn, .chip').filter(b => b.tagName === 'BUTTON' && !b.hasAttribute('aria-pressed')).length,
+  0);
+check('upcoming waits are real buttons',
+  $$(w, '.rest-step, .flow--rest').filter(el => el.dataset.act === 'rest-now')
+    .every(el => el.tagName === 'BUTTON'), true);
+const details = card(w, 'ring-pullup').querySelector('.info-btn');
+check('details identifies its exercise', details.getAttribute('aria-label'), 'Show details for Pull-ups');
+check('and starts collapsed', details.getAttribute('aria-expanded'), 'false');
+details.click();
+check('opening details updates the accessible state',
+  card(w, 'ring-pullup').querySelector('.info-btn').getAttribute('aria-expanded'), 'true');
+check('every symbol-only set control has a name',
+  $$(w, '.step, .btn-done').filter(b => !b.getAttribute('aria-label')).length, 0);
+check('interactive control sizing follows the documented 44px floor',
+  [
+    /\.chip\s*\{[^}]*min-height:\s*44px/s.test(read('styles.css')),
+    /\.pick-btn\s*\{[^}]*height:\s*44px/s.test(read('styles.css')),
+    /\.info-btn\s*\{[^}]*height:\s*44px/s.test(read('styles.css')),
+  ], [true, true, true]);
 
 // ---------------------------------------------------------------- //
 section('Every button is wired to something');
@@ -308,7 +349,7 @@ const startable = (win, id) => rows(card(win, id)).map((r) => {
   const b = r.querySelector('[data-act="start-hold"]');
   return b ? !b.hasAttribute('disabled') : null;
 });
-// Ring fallouts are a three-set timed exercise, on workout B.
+// Fallouts are a three-set timed exercise, on workout B.
 $$(w, '.pick-btn').find((b) => b.dataset.w === 'B').click();
 check('a timed exercise queues its Start buttons too',
   startable(w, 'ring-fallout'), [true, false, false]);
@@ -439,13 +480,16 @@ check('opening the details panel loads a picture', !!img, true);
 // A display:none element has no layout box, so the lazy observer never fires
 // and the image never loads at all.
 check('the image is not lazy', img.hasAttribute('loading'), false);
-check('it hides itself if the file is missing', img.hasAttribute('onerror'), true);
-// JSON.stringify inside a double-quoted attribute closes it early and silently
-// breaks the whole fallback chain.
-check('the fallback chain cannot close its own attribute',
-  $$(w, '.ex-img').every(i => !i.getAttribute('onerror').includes('"')), true);
-check('and it reveals the figure only once the file arrives',
-  /display=.block./.test(img.getAttribute('onload')), true);
+check('image loading uses no inline event handlers',
+  [img.hasAttribute('onerror'), img.hasAttribute('onload')], [false, false]);
+check('the fallback list is inert JSON data',
+  Array.isArray(JSON.parse(img.getAttribute('data-fallbacks'))), true);
+check('and it stays hidden until the file arrives', img.parentNode.style.display, '');
+img.load();
+check('then reveals its figure', img.parentNode.style.display, 'block');
+const failedFigure = img.parentNode;
+img.error();
+check('a missing image removes the figure after its fallbacks', failedFigure.parentNode, null);
 
 // crossorigin is what lets the service worker cache a remote image, but on
 // file:// a CORS request is rejected outright — it killed every local
@@ -469,7 +513,7 @@ const onDisk = new Set(readdirSync(join(root, 'images')).filter(f => /\.(gif|svg
 const localSrcs = $$(http, '.ex-img')
   .map(i => i.getAttribute('src')).filter(u => !/^https?:/.test(u));
 const localFallbacks = $$(http, '.ex-img').flatMap(i =>
-  [...(i.getAttribute('onerror') || '').matchAll(/'(images\/[^']+)'/g)].map(m => m[1]));
+  JSON.parse(i.getAttribute('data-fallbacks') || '[]').filter(u => !/^https?:/.test(u)));
 check('every local image requested actually exists',
   [...localSrcs, ...localFallbacks]
     .map(u => decodeURIComponent(u.replace('images/', '')))
@@ -594,6 +638,437 @@ card(w, 'movement-prep').querySelector('[data-act="toggle-info"]').click();
 check('no stepper where there is no ladder',
   card(w, 'movement-prep').querySelectorAll('.lvl-set').length, 0);
 
+
+// ---------------------------------------------------------------- //
+section('Training somewhere else');
+
+// An exercise needs a capability, not an object: a dead hang needs something
+// overhead to hang from, and a park bar does fine. A feet-assisted pull-up
+// needs that something to be at a height you choose, and only rings give that.
+const at = (place) => {
+  const win = boot();
+  $$(win, '[data-act="set-place"]').find((b) => b.dataset.place === place).click();
+  return win;
+};
+
+w = boot();
+check('the place picker offers everywhere', $$(w, '[data-act="set-place"]').length,
+  Object.keys(P.places).length);
+check('and starts at home', $(w, '#placeRow').querySelector('.cap--on').textContent, 'Home');
+check('nothing is impossible at home', $$(w, '#placeNote').length, 0);
+
+const park = at('park');
+check('switching places is remembered', stored(park).settings.kit, P.places.park.has);
+// Workout A loses no PATTERN in a park, so there is nothing to report — even
+// though it is done with different equipment throughout.
+check('workout A is fully covered in a park', $$(park, '#placeNote').length, 0);
+check('and still has push-ups, on the floor',
+  $$(park, '.ex-card').map((c) => c.dataset.ex).includes('pushup'), true);
+// Workout B used to lose knee flexion in a park. The slider curl needs a floor
+// and a towel, so there is nothing left to report — the two exercises a park
+// cannot do are both SUBSTITUTED rather than dropped, which is the difference
+// between losing an exercise and losing a pattern.
+$$(park, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+check('workout B is fully covered in a park too', $$(park, '#placeNote').length, 0);
+const parkIds = $$(park, '.ex-card').map((c) => c.dataset.ex);
+check('the fallout is replaced rather than dropped', parkIds.includes('plank'), true);
+check('and so is the ring curl', parkIds.includes('slider-leg-curl'), true);
+check('with neither original still there',
+  parkIds.filter((id) => id === 'ring-fallout' || id === 'ring-leg-curl'), []);
+check('the card says what it is standing in for',
+  card(park, 'plank').querySelector('.tag-sub').textContent,
+  'for Fallouts');
+check('it keeps the volume the workout asked for',
+  rows(card(park, 'plank')).length, P.exercises['ring-fallout'].sets);
+check('and nothing the workout asked for is missing from the session',
+  P.workouts.B.order.length, parkIds.length);
+// At home the workout runs as written — nothing stands in for anything.
+check('no substitution happens at home', $$(w, '.tag-sub').length, 0);
+$$(park, '.pick-btn').find((b) => b.dataset.w === 'A').click();
+check('but everything else is still there', $$(park, '.ex-card').length > 5, true);
+
+// The chips name what is actually in front of you.
+check('at home the hang is on the rings',
+  card(w, 'dead-hang').querySelector('.ex-kit').textContent.includes('rings'), true);
+check('in the park it is a high bar',
+  card(park, 'dead-hang').querySelector('.ex-kit').textContent.includes('high bar'), true);
+check('and the dips are on parallel bars',
+  card(park, 'ring-dip').querySelector('.ex-kit').textContent.includes('parallel bars'), true);
+
+// Capping rather than dropping: you lose the progression, not the movement.
+const high = boot({ stored: { version: 3, settings: { place: 'park' },
+  exerciseState: { 'ring-row': { level: 4, vest: 0, target: 10, topOutStreak: 0, failStreak: 0 } } } });
+check('a level the room cannot equip drops to one it can',
+  /Level 3\/5/.test(card(high, 'ring-row').textContent), true);
+check('and the card says why, naming the missing thing',
+  /Down to level 3 here — no chair 45 cm/.test(card(high, 'ring-row').textContent), true);
+check('and where you really are', /Your level is 5\./.test(card(high, 'ring-row').textContent), true);
+
+// Requirements are not monotonic: a toes-down hang needs a height you CHOOSE,
+// a full hang needs only a bar. So the room can push you UP a rung, not just
+// down — and a search that only capped produced a level nothing satisfied.
+const parkHang = boot({ stored: { version: 3, settings: { place: 'park' },
+  exerciseState: { 'dead-hang': { level: 0, vest: 0, target: 20, topOutStreak: 0, failStreak: 0 } } } });
+check('the easy rung can be the impossible one',
+  /Level 2\/3/.test(card(parkHang, 'dead-hang').textContent), true);
+check('and the card says it went UP, not down',
+  /Up to level 2 here/.test(card(parkHang, 'dead-hang').textContent), true);
+check('the chip names the bar you are actually on',
+  card(parkHang, 'dead-hang').querySelector('.ex-kit').textContent.includes('high bar'), true);
+check('your stored level is untouched', stored(high).exerciseState['ring-row'].level, 4);
+
+// Going home puts it all back.
+$$(high, '[data-act="set-place"]').find((b) => b.dataset.place === 'home').click();
+check('back home the cap is gone', /Level 5\/5/.test(card(high, 'ring-row').textContent), true);
+check('and nothing is missing', $$(high, '#placeNote').length, 0);
+
+// The setup text tells you how to rig the rings. In a park nothing is rigged.
+check('at home the station explains the set-up', $$(w, '.st-setup').length > 0, true);
+check('in a park there is nothing to set up', $$(park, '.st-setup').length, 0);
+// The station still groups the session, but naming it after a ring height you
+// have not got is worse than saying nothing — so it names the role instead.
+const stations = (win) =>
+  $$(win, '.st-label').map((e) => e.textContent.replace(/\d+ \/ \d+/, '').trim());
+check('at home a station names the rig', stations(w).includes('Rings overhead'), true);
+check('in a park it names the role instead', stations(park).includes('Overhead'), true);
+check('and mentions no rings at all',
+  stations(park).some((s) => /ring/i.test(s)), false);
+check('and the session is still grouped, not one flat list',
+  stations(park).length > 1, true);
+
+// Nothing is dropped from workout A, so the session is the same length — it is
+// just done on different equipment. That is the whole point.
+check('a park session of workout A is the same length as at home',
+  +/~(\d+) min/.exec($(park, '.sh-meta').textContent)[1],
+  +/~(\d+) min/.exec($(w, '.sh-meta').textContent)[1]);
+check('with the same number of exercises',
+  $$(park, '.ex-card').length, $$(w, '.ex-card').length);
+check('but not the same equipment',
+  $(park, '.tagline').textContent === $(w, '.tagline').textContent, false);
+
+// A gym is a park with better furniture: a bench and a box stand in for the
+// sofa and the chair, so nothing is lost that a park would not also lose.
+const gym = at('gym');
+check('a gym loses no more than a park does',
+  $$(gym, '#placeNote').length, $$(park, '#placeNote').length);
+check('the ticks are visible for a preset too', $$(gym, '#kitPick').length, 1);
+check('and show exactly what the preset filled in',
+  $$(gym, '.kit-tick--on').map((b) => b.dataset.kit), P.places.gym.has);
+$$(gym, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+$$(park, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+check('the gym misses nothing, exactly like the park',
+  [$$(gym, '#placeNote').length, $$(park, '#placeNote').length], [0, 0]);
+// The rung that needs a 45 cm chair at home is the one a gym bench covers —
+// without it the hip thrust would be stuck on the floor rung forever.
+const gymHip = boot({ stored: { version: 3, settings: { place: 'gym' },
+  exerciseState: { 'hip-thrust': { level: 2, vest: 0, target: 12, topOutStreak: 0, failStreak: 0 } } } });
+$$(gymHip, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+check('the real hip thrust survives, on a bench',
+  card(gymHip, 'hip-thrust').querySelectorAll('.gear--on').map((b) => b.textContent), ['bench']);
+check('at its full level', /Level 3\/4/.test(card(gymHip, 'hip-thrust').textContent), true);
+
+// ---------------------------------------------------------------- //
+section('The ticks are what decide the session');
+
+// A named place is a button that fills the list, not a mode. That is the whole
+// point: "home, plus the high bar I just bought" was not expressible while the
+// places were fixed lists in the program.
+const any = at('nothing');
+check('the picker is always there', $$(any, '#kitPick').length, 1);
+check('with a tick-box per piece of equipment',
+  $$(any, '[data-act="toggle-kit"]').length, Object.keys(P.equipment).length);
+check('Nothing clears every tick', $$(any, '.kit-tick--on').length, 0);
+check('and it says what that means', /Nothing ticked/.test($(any, '#kitEmpty').textContent), true);
+
+// With an empty room you still get a session — just the floor work. That is a
+// real answer, not an error page.
+const bare = $$(any, '.ex-card').map((c) => c.dataset.ex);
+check('an empty room still yields a session', bare.length > 0, true);
+check('and it is the things that need nothing at all',
+  bare, ['movement-prep', 'split-squat', 'pike-pushup', 'pushup', 'calf-raise']);
+check('while what needs a bar is honestly reported missing',
+  /vertical pull/.test($(any, '#placeNote').textContent), true);
+
+// Ticking a bar has to change the session, not just the checkbox.
+const tick = (win, token) =>
+  $$(win, '[data-act="toggle-kit"]').find((b) => b.dataset.kit === token).click();
+tick(any, 'high-bar');
+check('ticking a high bar shows it ticked', $$(any, '.kit-tick--on').length, 1);
+check('and pull-ups appear', $$(any, '.ex-card').map((c) => c.dataset.ex).includes('ring-pullup'), true);
+check('and vertical pull is no longer missing',
+  $$(any, '#placeNote').length === 0 || !/vertical pull/.test($(any, '#placeNote').textContent), true);
+check('the tick survives a reload', stored(any).settings.kit, ['high-bar']);
+
+// Ticks that match no preset are a real answer, not a broken state.
+check('a list matching no preset says so', $$(any, '#placeRow .is-static').length, 1);
+const litPresets = (win) =>
+  $$(win, '#placeRow .cap--on').filter((b) => b.dataset.act === 'set-place');
+check('and no preset is highlighted as if it were true', litPresets(any).length, 0);
+
+// Untick puts it back, or the box would be a one-way switch.
+tick(any, 'high-bar');
+check('unticking removes it', $$(any, '.kit-tick--on').length, 0);
+check('and the exercise goes with it',
+  $$(any, '.ex-card').map((c) => c.dataset.ex).includes('ring-pullup'), false);
+
+// The thing the fixed-list model could not express: home plus something new.
+const homePlus = at('home');
+tick(homePlus, 'high-bar');
+check('a preset can be amended rather than replaced',
+  $$(homePlus, '.kit-tick--on').length, P.places.home.has.length + 1);
+check('and it is no longer any named place', litPresets(homePlus).length, 0);
+check('but nothing is lost by adding to it', $$(homePlus, '#placeNote').length, 0);
+// A high bar adds only hang-high, which the rings already give — so the session
+// is unchanged. Worth pinning: it is why this was never a blocker, only a gap.
+check('a high bar at home changes nothing, because the rings already cover it',
+  $$(homePlus, '.ex-card').map((c) => c.dataset.ex),
+  $$(at('home'), '.ex-card').map((c) => c.dataset.ex));
+
+// A preset REPLACES the ticks: tapping Park has to drop the rings, or the
+// session would still be planned around equipment you walked away from.
+const back = at('park');
+check('tapping a preset replaces the list rather than adding to it',
+  $$(back, '.kit-tick--on').map((b) => b.dataset.kit), P.places.park.has);
+
+// Straps are the only thing anywhere that holds your heels, and so the only
+// answer to knee flexion away from home.
+const trx = boot({ stored: { version: 4, settings: {
+  kit: P.places.gym.has.concat('straps') } } });
+$$(trx, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+check('a room with straps loses nothing at all', $$(trx, '#placeNote').length, 0);
+check('including the leg curl',
+  $$(trx, '.ex-card').map((c) => c.dataset.ex).includes('ring-leg-curl'), true);
+check('done on the straps', card(trx, 'ring-leg-curl').querySelector('.ex-kit')
+  .textContent.includes('suspension straps'), true);
+
+// ---------------------------------------------------------------- //
+section('Choosing which of the things you have');
+
+// With rings and a high bar both up, a chin-up can be done on either, and
+// declaration order was quietly answering "rings" every time.
+const gears = (win, ex) => card(win, ex).querySelectorAll('[data-act="pick-gear"]');
+/* What the card says you are on: the chosen gear where it asked, the summary
+ * chip where it did not. Those are the same claim shown in one place or the
+ * other, never both. */
+const onWhat = (win, ex) => {
+  const picked = gears(win, ex).filter((b) => b.classList.contains('gear--on'));
+  return picked.length ? picked.map((b) => b.textContent).join(' ')
+    : card(win, ex).querySelector('.ex-kit').textContent;
+};
+const withBar = (extra) => boot({ stored: { version: 4, settings: {
+  kit: P.places.home.has.concat('high-bar'), ...extra } } });
+
+w = withBar();
+check('nothing to ask where one thing does the job', gears(w, 'split-squat').length, 0);
+check('but a hang offers both', gears(w, 'hanging-leg-raise').map((b) => b.dataset.gear),
+  ['rings', 'high-bar']);
+check('the question is worded, not just a row of chips',
+  card(w, 'hanging-leg-raise').querySelectorAll('.gear-label')[0].textContent, 'hang from');
+check('with declaration order marked until you say otherwise',
+  gears(w, 'hanging-leg-raise').filter((b) => b.classList.contains('gear--on'))
+    .map((b) => b.dataset.gear), ['rings']);
+check('and it is the only place the card says so',
+  card(w, 'hanging-leg-raise').querySelector('.ex-kit').textContent.includes('rings'), false);
+// ...but "no equipment" means the exercise needs none, not that everything it
+// needs was asked about above. Reading the filtered list alone said a hanging
+// leg raise needed nothing, one line under a choice of two things to hang from.
+check('and it does not then claim the exercise needs nothing',
+  card(w, 'hanging-leg-raise').querySelector('.ex-kit').textContent.includes('no equipment'), false);
+check('while something that genuinely needs nothing still says so',
+  card(w, 'pushup').querySelector('.ex-kit').textContent.includes('no equipment'), true);
+check('because repeating it underneath would say the same thing twice',
+  onWhat(w, 'hanging-leg-raise'), 'rings');
+
+gears(w, 'hanging-leg-raise').find((b) => b.dataset.gear === 'high-bar').click();
+check('picking the bar changes what the card says you are on',
+  onWhat(w, 'hanging-leg-raise'), 'high bar');
+check('and it is stored against the CAPABILITY, not the exercise',
+  stored(w).settings.gear, { 'hang-high': 'high-bar' });
+
+// That is the whole reason for keying it this way: you do not hang from the
+// rings for one exercise and walk to the bar for the next. Pull-ups have to be
+// at their bodyweight rung to show it, because the assisted rungs below need a
+// height you CHOOSE — which is the next check.
+const bw = { 'ring-pullup': { level: 2, vest: 0, target: 6, topOutStreak: 0, failStreak: 0 } };
+const onBar = withBar({ gear: { 'hang-high': 'high-bar' } });
+onBar.localStorage.setItem(KEY, JSON.stringify({ ...stored(onBar), exerciseState: bw }));
+const onBar2 = boot({ stored: JSON.parse(onBar.localStorage.getItem(KEY)) });
+check('everything else on the same capability follows',
+  onWhat(onBar2, 'ring-pullup'), 'high bar');
+check('and the choice survives a reload',
+  stored(onBar2).settings.gear, { 'hang-high': 'high-bar' });
+
+// ...but only where the capability is the same one. A feet-assisted pull needs
+// a height you CHOOSE, which a fixed bar cannot give, so it stays on the rings
+// — and that is why the chin-up card shows no choice until you reach bodyweight.
+check('a rung needing an adjustable height is unaffected',
+  onWhat(w, 'dead-hang').includes('rings'), true);
+check('and offers no choice at all, because there is none',
+  gears(w, 'dead-hang').length, 0);
+check('nor does the assisted pull-up, which is the same reason the chin-up card ' +
+  'shows nothing until you reach bodyweight', gears(w, 'ring-pullup').length, 0);
+
+// A preference must never widen what is possible — only pick between equals.
+const impossible = boot({ stored: { version: 4, settings: {
+  kit: ['high-bar'], gear: { 'handles-low': 'high-bar' } } } });
+$$(impossible, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+check('preferring something that cannot do the job does not unlock it',
+  $$(impossible, '.ex-card').map((c) => c.dataset.ex).includes('ring-leg-curl'), false);
+
+// Untick the thing you preferred and the preference has to stop applying,
+// rather than leaving a dangling choice that quietly does nothing.
+const untick = withBar({ gear: { 'hang-high': 'high-bar' } });
+check('the preference applies while it is ticked',
+  onWhat(untick, 'hanging-leg-raise'), 'high bar');
+$$(untick, '[data-act="toggle-kit"]').find((b) => b.dataset.kit === 'high-bar').click();
+check('and falls back cleanly once it is gone',
+  onWhat(untick, 'hanging-leg-raise').includes('rings'), true);
+check('with the question no longer asked', gears(untick, 'hanging-leg-raise').length, 0);
+
+// Searching "ring pull ups" while you are hanging off a park bar sends you to
+// the wrong video, and the exercise no longer knows which one you are on — so
+// the query names the movement and picks up the equipment you actually chose.
+const query = (win, ex) => {
+  card(win, ex).querySelector('[data-act="toggle-info"]').click();
+  return card(win, ex).querySelector('.vid-q').textContent;
+};
+check('at home the query says rings', query(boot(), 'ring-row'), 'rings inverted row form tutorial');
+const atPark = boot({ stored: { version: 4, settings: { kit: P.places.park.has } } });
+check('in a park it says low bar', query(atPark, 'ring-row'), 'low bar inverted row form tutorial');
+check('and an exercise needing nothing names nothing',
+  query(boot(), 'pushup'), 'push up form tutorial');
+check('no query still names equipment it is not on',
+  Object.values(P.exercises).filter((ex) => /\bring/i.test(ex.search || '')).map((ex) => ex.name), []);
+
+// ---------------------------------------------------------------- //
+section('Choosing which exercise trains a pattern');
+
+// Step 2 of "equipment first, then exercise": with the room settled, pick which
+// of the exercises that train this pattern you actually feel like doing.
+const swaps = (win, ex) => card(win, ex).querySelectorAll('[data-act="pick-variant"]');
+const swapTo = (win, ex, to) =>
+  swaps(win, ex).find((b) => b.dataset.variant === to).click();
+const toB = (win) => $$(win, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+
+// What the program already schedules is NOT a free choice, even where the
+// pattern matches. Chin-ups and pull-ups are both vertical pulls, and either
+// beats nothing if a place can only manage one — but a supinated grip pulls
+// with the elbow flexors in a way a pronated one does not, which is why the
+// week puts one in A and the other in B. Offering them rebootst each other
+// would let you chin twice a week and never pronate.
+w = boot();
+check('a scheduled exercise is not offered as a swap', swaps(w, 'ring-pullup').length, 0);
+toB(w);
+check('nor the other way round', swaps(w, 'ring-chinup').length, 0);
+// Variety went where the WEEK spends its volume: the two highest-volume
+// patterns in A both carry an alternative now.
+const swappable = (win) => $$(win, '.ex-card').filter((c) => c.querySelectorAll('.swap-row').length)
+  .map((c) => c.dataset.ex);
+check('workout A offers a choice on its two busiest patterns',
+  swappable(boot()), ['ring-row', 'pushup']);
+
+// The fallout is scheduled; the plank is not, so it is a spare part and a real
+// alternative. That is the one genuine choice the program holds right now.
+w = boot();
+toB(w);
+check('an unscheduled sibling IS offered', swaps(w, 'ring-fallout').map((b) => b.dataset.variant),
+  ['ring-fallout', 'plank']);
+check('with the prescribed one marked', swaps(w, 'ring-fallout')
+  .filter((b) => b.classList.contains('swap--on')).map((b) => b.dataset.variant), ['ring-fallout']);
+check('a pattern with one exercise offers nothing', swaps(w, 'hip-thrust').length, 0);
+check('and workout B carries four, including the two that close its park gaps',
+  swappable(w), ['ring-row', 'ring-fallout', 'ring-leg-curl', 'pushup']);
+check('the ring curl offers the floor version',
+  swaps(w, 'ring-leg-curl').map((b) => b.dataset.variant), ['ring-leg-curl', 'slider-leg-curl']);
+
+swapTo(w, 'ring-fallout', 'plank');
+check('swapping replaces the card', $$(w, '.ex-card').map((c) => c.dataset.ex).includes('plank'), true);
+check('and the one it replaced is gone',
+  $$(w, '.ex-card').map((c) => c.dataset.ex).includes('ring-fallout'), false);
+check('the choice is keyed by workout AND slot, so A and B stay independent',
+  stored(w).settings.variant, { 'B:ring-fallout': 'plank' });
+check('the new card still offers the way back',
+  swaps(w, 'plank').map((b) => b.dataset.variant), ['ring-fallout', 'plank']);
+check('with the chosen one marked now', swaps(w, 'plank')
+  .filter((b) => b.classList.contains('swap--on')).map((b) => b.dataset.variant), ['plank']);
+check('and the volume the workout asked for carries over',
+  rows(card(w, 'plank')).length, P.exercises['ring-fallout'].sets);
+
+// The reported bug: the choice was written to storage and dropped on the way
+// back in, because load() copies only the keys DEFAULT_SETTINGS declares. The
+// first test for this checked what was WRITTEN and never re-booted, which is
+// exactly the vacuous persistence assertion that let it through.
+let reboot = boot({ stored: JSON.parse(w.localStorage.getItem(KEY)) });
+toB(reboot);
+check('the swap survives a reload',
+  $$(reboot, '.ex-card').map((c) => c.dataset.ex).includes('plank'), true);
+check('and it is still offered both ways afterwards',
+  swaps(reboot, 'plank').map((b) => b.dataset.variant), ['ring-fallout', 'plank']);
+swapTo(reboot, 'plank', 'ring-fallout');
+check('so it can be swapped back after a reload',
+  $$(reboot, '.ex-card').map((c) => c.dataset.ex).includes('ring-fallout'), true);
+
+// Choosing back is not an override — storing it would freeze the slot rebootst
+// a later change to the program.
+check('choosing what was prescribed clears the override', stored(reboot).settings.variant, {});
+reboot = boot({ stored: JSON.parse(reboot.localStorage.getItem(KEY)) });
+toB(reboot);
+check('and THAT survives a reload too',
+  $$(reboot, '.ex-card').map((c) => c.dataset.ex).includes('ring-fallout'), true);
+
+// Logging pins the choice, for the same reason it pins the level: the session
+// records what you did rebootst the exercise you did it on.
+w = boot();
+toB(w);
+swapTo(w, 'ring-fallout', 'plank');
+rows(card(w, 'plank'))[0].querySelector('[data-act="log-set"]').click();
+check('a logged set locks the swap',
+  swaps(w, 'plank').every((b) => b.hasAttribute('disabled')), true);
+check('and says why', /Swap before you log a set/.test(card(w, 'plank').textContent), true);
+swapTo(w, 'plank', 'ring-fallout');
+check('so it cannot be moved',
+  $$(w, '.ex-card').map((c) => c.dataset.ex).includes('plank'), true);
+rows(card(w, 'plank'))[0].querySelector('[data-act="undo-set"]').click();
+check('undoing the set unlocks it reboot',
+  swaps(w, 'plank').every((b) => !b.hasAttribute('disabled')), true);
+
+// The lock note APPEARS mid-card, which is the shape that broke the patcher:
+// a keyed node with no old match used to eat the next unkeyed slot, so the
+// <div class="sets"> below it was patched into the kit row and every set row
+// was rebuilt. Held references went stale and taps did nothing. Looking rows
+// up fresh hides it completely, so this holds them across the log.
+w = boot();
+toB(w);
+swapTo(w, 'ring-fallout', 'plank');
+const heldRows = [...rows(card(w, 'plank'))];
+const heldSets = card(w, 'plank').querySelectorAll('.sets')[0];
+heldRows.forEach((r) => r.querySelector('[data-act="log-set"]').click());
+check('every held row still logged its set, after the lock note appeared',
+  rows(card(w, 'plank')).map((r) => r.classList.contains('set-row--done')),
+  heldRows.map(() => true));
+check('the rows kept their identity',
+  rows(card(w, 'plank')).map((r, i) => r === heldRows[i]), heldRows.map(() => true));
+check('and so did the container holding them',
+  card(w, 'plank').querySelectorAll('.sets')[0] === heldSets, true);
+
+// Equipment decides the list — that is what makes it step 2 rather than step 1.
+const noRings = boot();
+$$(noRings, '[data-act="set-place"]').find((b) => b.dataset.place === 'park').click();
+toB(noRings);
+check('a park offers the plank with no way back to the fallout',
+  swaps(noRings, 'plank').length, 0);
+check('because the fallout is not doable there',
+  card(noRings, 'plank').querySelector('.tag-sub').textContent,
+  'for Fallouts');
+
+// A choice the room cannot honour falls back to substitution rather than
+// vanishing — the two mechanisms have to compose.
+const gone = boot({ stored: { version: 4, settings: {
+  kit: P.places.park.has, variant: { 'B:ring-fallout': 'ring-fallout' } } } });
+toB(gone);
+check('an impossible choice is substituted, not dropped',
+  $$(gone, '.ex-card').map((c) => c.dataset.ex).includes('plank'), true);
+
 // ---------------------------------------------------------------- //
 section('Session length cap');
 
@@ -606,7 +1081,9 @@ check('capping shortens the estimate', minutes(w) < full, true);
 check('and says what it took out', $$(w, '.cap-note').length, 1);
 check('the trimmed exercises are named',
   /\d+→\d+/.test($(w, '.cap-note').textContent), true);
-check('the chip shows as selected', $(w, '.cap--on').textContent, '30 min');
+// Two chip rows now (where, and how long), so scope it to the time row.
+check('the chip shows as selected',
+  $(w, '#capRow').querySelector('.cap--on').textContent, '30 min');
 $$(w, '[data-act="set-cap"]').find(b => b.dataset.cap === '0').click();
 check('going back to Full restores the estimate', minutes(w), full);
 
@@ -864,7 +1341,7 @@ check('rest starts at the exercise’s own interval',
 w.advance(60000);
 check('and counts down', w.document.getElementById('restTime').textContent, '1:30');
 check('naming the set it is resting before',
-  /Ring pull-ups/.test(w.document.getElementById('restLabel').textContent), true);
+  /Pull-ups/.test(w.document.getElementById('restLabel').textContent), true);
 w.advance(89000);
 check('still running with a second to go', restBar().hidden, false);
 w.advance(2000);
@@ -1012,7 +1489,7 @@ settle(w);
 // The numbers matter as much as the name — otherwise you have to pick the
 // phone up off the floor to find out what you were just told to do.
 check('and says which set is next, with the numbers',
-  said(w).pop(), 'Ring pull-ups, set 2, 6 reps');
+  said(w).pop(), 'Pull-ups, set 2, 6 reps');
 
 // And between exercises, naming the exercise rather than just the set.
 w = boot({ listen: true });
@@ -1028,7 +1505,7 @@ w = boot({ listen: true });
 rows(card(w, 'split-squat'))[0].querySelector('[data-act="log-set"]').click();
 settle(w);
 check('mid-pair it tells you to go straight over',
-  said(w), ['Ring face pulls, set 1, 12 reps, now']);
+  said(w), ['Face pulls, set 1, 12 reps, now']);
 check('with no beep, because there is no wait', beeps(w), 0);
 check('and no clock running', $(w, '#restBar').hidden, true);
 
@@ -1040,7 +1517,7 @@ card(w, 'ring-dip').querySelectorAll('.rest-step')[0].click();
 w.advance(151000);
 settle(w);
 check('a wait you tapped ends the same way', beeps(w), 1);
-check('and says the same thing', said(w).pop(), 'Ring dips, set 2, 6 reps');
+check('and says the same thing', said(w).pop(), 'Dips, set 2, 6 reps');
 
 // Timed work is announced in seconds, per-side work says so, and the vest is
 // mentioned only when it is actually on.
@@ -1055,7 +1532,7 @@ w = boot({ listen: true, stored: { version: 3, settings: { phaseOverride: 3 },
   exerciseState: { 'ring-pullup': { level: 2, vest: 2, target: 6, topOutStreak: 0, failStreak: 0 } } } });
 rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
 w.advance(151000); settle(w);
-check('a loaded exercise says the weight', said(w).pop(), 'Ring pull-ups, set 2, 6 reps, 2 kilos');
+check('a loaded exercise says the weight', said(w).pop(), 'Pull-ups, set 2, 6 reps, 2 kilos');
 // And an unloaded one does not say "bodyweight" every single time.
 check('an unloaded one stays quiet about it',
   /kilo/.test((() => {
@@ -1070,7 +1547,7 @@ w = boot({ listen: true, stored: { version: 3,
 rows(card(w, 'split-squat'))[0].querySelector('[data-act="log-set"]').click();
 settle(w);
 check('a single-leg level says per side',
-  said(w).pop(), 'Ring face pulls, set 1, 12 reps, now');
+  said(w).pop(), 'Face pulls, set 1, 12 reps, now');
 w = boot({ listen: true, stored: { version: 3,
   exerciseState: { 'ring-leg-curl': { level: 4, vest: 0, target: 8, topOutStreak: 0, failStreak: 0 } } } });
 $$(w, '.pick-btn').find((b) => b.dataset.w === 'B').click();
@@ -1196,7 +1673,7 @@ check('the warm-up has no waits to show',
 // you standing still through the half of the round you should be doing.
 check('a paired exercise says the partner comes first',
   card(w, 'split-squat').querySelector('.rest-step').textContent,
-  '⇄ Ring face pulls, then rest 90 s');
+  '⇄ Face pulls, then rest 90 s');
 
 // The one that is running shows the clock, in the sequence and in the bar.
 w = boot();
@@ -1246,6 +1723,68 @@ rows(card(w, 'ring-pullup'))[0].querySelector('[data-act="log-set"]').click();
 check('with the timer off nothing goes live', $$(w, '.rest-step--live').length, 0);
 check('but the waits are still written down',
   card(w, 'ring-pullup').querySelectorAll('.rest-step').length, 2);
+
+
+// ---------------------------------------------------------------- //
+section('Am I going to finish?');
+
+// The failure this closes: workout B ran out of time, the last three exercises
+// were never done, and nothing warned anybody. The app showed the estimate it
+// made before the session and a clock counting up — neither of which answers
+// the question you have at minute 35.
+const pace = (win) => ($(win, '#pacing') || { textContent: '' }).textContent;
+
+w = boot();
+check('nothing is claimed before a session starts', $$(w, '#pacing').length, 0);
+$(w, '[data-act="start"]').click();
+check('and nothing while there is too little behind you to mean anything',
+  $$(w, '#pacing').length, 0);
+
+// Log through the warm-up and a couple of working sets, on model.
+for (let i = 0; i < 4; i++) {
+  const b = $(w, '.set-row [data-act="log-set"]');
+  if (!b) break;
+  b.click();
+  w.advance(150000);
+}
+check('once there is a session behind you, it says what is left',
+  /~\d+ min left/.test(pace(w)), true);
+check('and when you will finish', /finishing about \d\d:\d\d/.test(pace(w)), true);
+
+// Running slow has to stretch the estimate, or the warning arrives too late.
+w = boot({ stored: { version: 3, settings: { sessionCapMin: 40 } } });
+$(w, '[data-act="start"]').click();
+for (let i = 0; i < 3; i++) {
+  const b = $(w, '.set-row [data-act="log-set"]');
+  if (b) b.click();
+  w.advance(420000); // seven minutes a set — well off the pace
+}
+check('a slow session is called slow', /running \d+% slow/.test(pace(w)), true);
+check('and flagged against the cap you set', $(w, '#pacing').classList.contains('pace--over'), true);
+check('with a reason to act now rather than later',
+  /while there is still something to cut/.test(pace(w)), true);
+
+// A quick session should not be nagged at.
+w = boot({ stored: { version: 3, settings: { sessionCapMin: 50 } } });
+$(w, '[data-act="start"]').click();
+for (let i = 0; i < 4; i++) {
+  const b = $(w, '.set-row [data-act="log-set"]');
+  if (b) b.click();
+  w.advance(20000);
+}
+check('a fast session says so instead', /% ahead/.test(pace(w)), true);
+check('and is not flagged', $(w, '#pacing').classList.contains('pace--over'), false);
+
+// And when there is nothing left, say that rather than a countdown to zero.
+w = boot();
+for (let i = 0; i < 60; i++) {
+  const b = $(w, '.set-row [data-act="log-set"]');
+  if (!b) break;
+  b.click();
+  w.advance(60000);
+}
+check('everything logged reads as done, not as zero minutes left',
+  $(w, '.pace--done').textContent, 'Everything is logged. Hit Finish.');
 
 // ---------------------------------------------------------------- //
 section('Where you are');
@@ -1481,11 +2020,93 @@ for (const [sel, value, label] of [
 }
 tab(w, 'today');
 
+// The above compares what is SHOWN, which misses a setting written by the app
+// but never declared in DEFAULT_SETTINGS: load() copies only the keys it knows,
+// so such a setting is saved and then silently dropped on the way back in. That
+// is how the exercise swap was lost across a reload while its own test — which
+// checked what was WRITTEN and never re-booted — passed throughout.
+w = boot();
+$$(w, '.pick-btn').find((b) => b.dataset.w === 'B').click();
+swapTo(w, 'ring-fallout', 'plank');
+$$(w, '[data-act="toggle-kit"]').find((b) => b.dataset.kit === 'straps').click();
+$$(w, '[data-act="set-cap"]').find((b) => b.dataset.cap === '40').click();
+const settled = stored(w).settings;
+const reloaded = boot({ stored: stored(w) });
+$$(reloaded, '[data-act="set-cap"]').find((b) => b.dataset.cap === '40').click();
+check('every setting the app writes is a setting it can read back',
+  Object.keys(stored(reloaded).settings).sort(), Object.keys(settled).sort());
+check('and comes back with the same value', stored(reloaded).settings, settled);
+
 // The two deliberate exceptions, so nobody "fixes" them later.
 w = boot();
 card(w, 'ring-dip').querySelector('[data-act="toggle-info"]').click();
 check('an open details panel is NOT persisted, on purpose',
   $$(boot({ stored: stored(w) }), '.ex-info').filter((e) => !e.hidden).length, 0);
+
+
+// ---------------------------------------------------------------- //
+section('What the week actually trained');
+
+// From the real export: 41 sets logged across two sessions — a healthy-looking
+// number — with every hip-dominant and every overhead set missing. Nothing in
+// the app said so, because a total cannot.
+const week = (win) => $$(win, '.cov-row').map((r) => ({
+  name: r.querySelector('.cov-name').textContent,
+  n: r.querySelector('.cov-n').textContent,
+  missed: r.classList.contains('cov-row--missed'),
+}));
+const session = (workout, ids, date) => ({
+  date, workout, phaseId: 1, startedAt: date + 'T09:00:00.000Z', durationSec: 2400, note: '',
+  entries: Object.fromEntries(ids.map((id) => [id, {
+    level: 0,
+    sets: Array.from({ length: P.exercises[id].sets }, () => ({ value: 6, load: 0 })),
+  }])),
+});
+
+w = boot();
+tab(w, 'history');
+check('nothing to show before the first session', $$(w, '.cov-row').length, 0);
+
+// Exactly what happened: workout B lost its last three exercises to the clock.
+w = boot({ stored: { version: 3, exerciseState: {}, sessions: [
+  session('A', P.workouts.A.order.map((o) => o.id), '2026-03-01'),
+  session('B', P.workouts.B.order.map((o) => o.id)
+    .filter((id) => !['ring-leg-curl', 'pike-pushup', 'hip-thrust'].includes(id)), '2026-03-02'),
+] } });
+tab(w, 'history');
+check('every pattern is listed', week(w).length > 10, true);
+check('and the three that got nothing are called out',
+  week(w).filter((r) => r.missed).map((r) => r.name),
+  ['hip-dominant', 'knee flexion', 'overhead push']);
+check('named in a sentence, not just coloured',
+  $(w, '.cov-gap').textContent,
+  'Barely trained: hip-dominant, knee flexion, overhead push.');
+check('the ones that were covered read as met',
+  week(w).find((r) => r.name === 'vertical pull').n, '6/6');
+check('patterns are grouped into families',
+  $$(w, '.cov-group').map((e) => e.textContent), ['core', 'legs', 'prehab', 'pull', 'push']);
+// Every pattern needs a human label; a raw id leaking through means someone
+// added a pattern and forgot the other half.
+const rawIds = new Set(Object.values(P.exercises).map((e) => e.pattern));
+check('no raw pattern id reaches the screen',
+  week(w).map((r) => r.name).filter((n) => rawIds.has(n)), []);
+
+// Both days in full and there is nothing to flag.
+w = boot({ stored: { version: 3, exerciseState: {}, sessions: [
+  session('A', P.workouts.A.order.map((o) => o.id), '2026-03-01'),
+  session('B', P.workouts.B.order.map((o) => o.id), '2026-03-02'),
+] } });
+tab(w, 'history');
+check('a complete week flags nothing', $$(w, '.cov-gap').length, 0);
+check('and says so', $(w, '.cov-ok').textContent, 'Every pattern got work.');
+
+// Only the last seven days.
+w = boot({ stored: { version: 3, exerciseState: {}, sessions: [
+  session('A', P.workouts.A.order.map((o) => o.id), '2026-02-01'),
+] } });
+tab(w, 'history');
+check('a session from last month does not count as this week',
+  week(w).every((r) => r.n.startsWith('0/')), true);
 
 // ---------------------------------------------------------------- //
 section('Settings');
@@ -1505,6 +2126,61 @@ works('resetting progression asks and obeys', () => {
   $(w, '[data-act="reset-progress"]').click();
 });
 check('progression is cleared', stored(w).exerciseState, {});
+
+// ---------------------------------------------------------------- //
+section('Backups and storage failures are recoverable');
+
+let damaged = boot({ stored: { version: 4, sessions: [], active: {} } });
+check('a malformed active session falls back to a working page',
+  /Workout A/.test($(damaged, '#sessionHead').textContent), true);
+check('and shows a persistent recovery warning', $(damaged, '#storageWarning').hidden, false);
+check('without overwriting the rejected stored data', stored(damaged).active, {});
+
+let future = boot({ stored: { version: 999, sessions: [] } });
+check('a backup from a future schema is refused',
+  /newer version/.test($(future, '#storageWarningWhat').textContent), true);
+
+let noStore = boot();
+noStore.localStorage.failWrites = true;
+$$(noStore, '.pick-btn').find(b => b.dataset.w === 'B').click();
+check('a failed save is visible outside the console', $(noStore, '#storageWarning').hidden, false);
+check('the warning offers an immediate backup',
+  $(noStore, '#storageWarningExport').textContent, 'Download recovery data');
+
+let importer = boot();
+tab(importer, 'data');
+let input = $(importer, '#importFile');
+input.files = [{ text: JSON.stringify({ version: 4, sessions: [], active: {} }) }];
+input.change();
+check('a malformed import is rejected', /invalid workout/.test($(importer, '#dataMsg').textContent), true);
+check('and never reaches localStorage', importer.localStorage.getItem(KEY), null);
+
+input = $(importer, '#importFile');
+input.files = [{ size: 6 * 1024 * 1024, text: '{}' }];
+input.change();
+check('an oversized import is rejected before it is read',
+  /larger than 5 MB/.test($(importer, '#dataMsg').textContent), true);
+
+input = $(importer, '#importFile');
+input.files = [{ text: JSON.stringify({
+  version: 4, settings: {}, exerciseState: {}, sessions: [], nextOverride: null,
+  active: { workout: 'A', entries: {
+    'ring-pullup': { sets: Array.from({ length: 101 }, () => ({ value: 6, load: 0 })) },
+  } },
+}) }];
+input.change();
+check('an import cannot create an unbounded set list',
+  /too many sets/.test($(importer, '#dataMsg').textContent), true);
+check('rejected complex data is still not committed', importer.localStorage.getItem(KEY), null);
+
+input = $(importer, '#importFile');
+input.files = [{ text: JSON.stringify({
+  version: 4, settings: {}, exerciseState: {}, sessions: [], active: null, nextOverride: 'B',
+}) }];
+input.change();
+check('a valid import is committed', stored(importer).nextOverride, 'B');
+tab(importer, 'today');
+check('and the imported state renders normally', /Workout B/.test($(importer, '#sessionHead').textContent), true);
 
 // ---------------------------------------------------------------- //
 report();

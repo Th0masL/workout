@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: 20
 
-      # 680 assertions across five suites, no dependencies to install. This
+      # More than 1,000 assertions across five suites, no dependencies to install. This
       # blocks a release that would ship a broken progression engine, a dead
       # click handler, or a generated image list that has drifted from disk.
       - name: Run the tests
@@ -44,7 +44,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site/data _site/icons _site/images
-          cp index.html styles.css manifest.json icon.svg _site/
+          cp index.html tokens.css styles.css manifest.json icon.svg _site/
           cp app.js progression.js patch.js audio.js sw.js _site/
           cp data/images.js data/program.js _site/data/
           cp icons/*.png _site/icons/

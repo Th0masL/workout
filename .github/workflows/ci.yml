@@ -51,3 +51,20 @@ jobs:
           git diff --compact-summary --exit-code -- data/images.js sw.js || \
             (echo; echo "data/images.js or sw.js is out of date with images/."; \
              echo "Run 'node tools/gen-images.mjs' and commit the result."; exit 1)
+
+  browser:
+    name: Browser and accessibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install development dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run real-browser checks
+        run: npm run test:browser

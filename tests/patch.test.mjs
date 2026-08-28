@@ -130,6 +130,39 @@ check('the textarea node survives', kids(h)[0] === ta, true);
 check('and a render that disagrees wins, rather than drifting', ta.value, 'saved note');
 
 // ---------------------------------------------------------------- //
+section('A keyed node appearing among unkeyed siblings');
+
+// The bug this catches shipped silently for weeks, because every keyed node in
+// the app existed in BOTH trees. The first CONDITIONAL keyed node — a warning
+// that shows up once you log a set — fired it: with no old node to match, it
+// fell through to positional matching and ate the next unkeyed slot on the way
+// past. Everything below then shifted by one, so <div class="sets"> was patched
+// into the kit row and every set row underneath was rebuilt. The buttons the
+// tap handler was holding went stale, and taps did nothing.
+h = host('<div class="a"></div><div class="b"></div><div class="c">rows</div>');
+const [a, b, cNode] = kids(h);
+patch(h, '<div class="a"></div><div id="new">appeared</div>' +
+         '<div class="b"></div><div class="c">rows</div>');
+check('the new keyed node is inserted', kids(h).map(k => k.getAttribute('id') || k.className),
+  ['a', 'new', 'b', 'c']);
+check('and the unkeyed siblings below it keep their identity',
+  [kids(h)[2] === b, kids(h)[3] === cNode], [true, true]);
+check('so nothing below was rebuilt', kids(h)[0] === a, true);
+
+// And it has to survive going away again, or the shift would just move.
+patch(h, '<div class="a"></div><div class="b"></div><div class="c">rows</div>');
+check('removing it puts the list back', kids(h).map(k => k.className), ['a', 'b', 'c']);
+check('still without rebuilding', [kids(h)[1] === b, kids(h)[2] === cNode], [true, true]);
+
+// The same node moving is a relocate, not a rebuild — that part already worked
+// and must keep working now that keyed nodes never fall back to position.
+h = host('<p id="x">x</p><p id="y">y</p>');
+const [px, py] = kids(h);
+patch(h, '<p id="y">y</p><p id="x">x</p>');
+check('a keyed node that swapped places is moved, not remade',
+  [kids(h)[0] === py, kids(h)[1] === px], [true, true]);
+
+// ---------------------------------------------------------------- //
 section('Emptying');
 
 h = host('<p>a</p><p>b</p>');

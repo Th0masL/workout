@@ -33,8 +33,8 @@
  */
 window.PROGRAM = {
   meta: {
-    name: "Rings & Bodyweight",
-    subtitle: "Full-body A/B",
+    name: "Bodyweight A/B",
+    subtitle: "Rings, bars, or whatever is there",
     /* Deliberately no fixed frequency or training days. The engine counts
      * sessions and elapsed weeks, never weekdays, so 2x and 3x both work — a
      * lighter week simply takes longer to clear a phase gate, which is the
@@ -45,6 +45,22 @@ window.PROGRAM = {
     sessionMinutes: [45, 55],
     vestTotalKg: 10,
   },
+
+  /* MOVEMENT PATTERNS, not muscles. Two exercises share a pattern only when one
+   * could genuinely stand in for the other — which is why "pull" had to split.
+   * A pull-up and a row are both lats; they are not substitutes, you need both.
+   * A hanging leg raise and a ring fallout are both abs; one produces hip
+   * flexion and the other resists extension.
+   *
+   * The coarse group (push / pull / legs / core / prehab) is DERIVED from the
+   * prefix, so there is one place to change and nothing to keep in sync.
+   *
+   *   prehab-warmup  prehab-hang  prehab-scap  prehab-rear-delt
+   *   pull-vertical  pull-horizontal
+   *   push-dip  push-vertical  push-horizontal
+   *   legs-knee  legs-hip  legs-knee-flexion  legs-calf
+   *   core-anti-extension  core-hip-flexion
+   */
 
   /* Ordered — a session renders its stations in this order, which is also the
    * order the rings physically travel: overhead, then chest, then they stay
@@ -57,10 +73,118 @@ window.PROGRAM = {
    *
    * (An earlier strap stopped at 80 cm and the leg curl had to be done with the
    * shoulders up on the 45 cm chair to get the same body angle. That is gone.) */
+
+  /* WHAT AN EXERCISE NEEDS IS A CAPABILITY, NOT AN OBJECT.
+   *
+   * "rings" was the wrong unit. A dead hang does not need rings, it needs
+   * something overhead to hang from — a park bar does just as well. But a
+   * feet-assisted pull-up DOES need rings, because it needs that something to
+   * be at a height you choose. Naming the object hid the difference; naming the
+   * capability makes it exact, and makes "what can I do here?" answerable.
+   *
+   * Equipment provides capabilities; exercises (per level) require them. */
+  equipment: {
+    rings: {
+      label: "rings",
+      provides: [
+        "hang-high",
+        "hang-high-adjustable",
+        "grip-chest",
+        "dip-support",
+        "dip-support-adjustable",
+        "handles-hanging",
+        "handles-low",
+        "steady",
+      ],
+    },
+    bars: { label: "push-up bars", provides: ["handles-floor"] },
+    sofa: { label: "sofa chair 20 cm", provides: ["step-20"] },
+    chair: { label: "chair 45 cm", provides: ["step-45", "steady"] },
+    "high-bar": { label: "high bar", provides: ["hang-high"] },
+    "low-bar": { label: "low bar", provides: ["grip-chest"] },
+    "dip-bars": { label: "parallel bars", provides: ["dip-support"] },
+    bench: { label: "bench", provides: ["step-45", "steady"] },
+    box: { label: "box or step", provides: ["step-20", "step-45"] },
+    /* A suspension trainer is a pair of rings by another name — everything the
+     * rings provide except a dip, which is not safe on a soft handle at height. */
+    straps: {
+      label: "suspension straps",
+      provides: [
+        "hang-high",
+        "hang-high-adjustable",
+        "grip-chest",
+        "handles-hanging",
+        "handles-low",
+        "steady",
+      ],
+    },
+  },
+
+  /* Where you are today. The session is resolved against whatever the place
+   * provides: a level whose requirements are not met is capped down to the
+   * highest one that is, and an exercise with no usable level at all is shown
+   * as unavailable rather than quietly dropped. */
+  places: {
+    home: { label: "Home", has: ["rings", "bars", "sofa", "chair"] },
+    park: { label: "Park", has: ["high-bar", "low-bar", "dip-bars"] },
+    /* A conservative gym: the things every gym has. Anything better — a
+     * suspension trainer, a proper dip station — gets ticked under Anywhere
+     * rather than assumed here, because a gym that turns out not to have it
+     * would quietly hand you a session you cannot do. */
+    gym: { label: "Gym", has: ["high-bar", "low-bar", "dip-bars", "bench", "box"] },
+    /* Not a place so much as a starting point: one tap to clear the list, then
+     * tick the two things that are actually in the hotel room. */
+    nothing: { label: "Nothing", has: [] },
+  },
+
+  /* What a pattern trains, in the words you would use to describe the session
+   * to someone. Display only — substitution runs on the PATTERN, because
+   * "lats" would happily swap a pull-up for a row and those are not
+   * substitutes. This is the reading, not the rule. */
+  trains: {
+    "prehab-warmup": "whole body, light",
+    "prehab-hang": "grip, shoulders",
+    "prehab-scap": "lower traps, serratus",
+    "prehab-rear-delt": "rear delts, rotator cuff",
+    "pull-vertical": "lats, biceps",
+    "pull-horizontal": "mid-back, rear delts, biceps",
+    "push-dip": "chest, triceps, front delts",
+    "push-vertical": "shoulders, triceps",
+    "push-horizontal": "chest, triceps",
+    "legs-knee": "quads, glutes",
+    "legs-hip": "glutes, hamstrings",
+    "legs-knee-flexion": "hamstrings",
+    "legs-calf": "calves",
+    "core-anti-extension": "abs, deep core",
+    "core-hip-flexion": "hip flexors, lower abs",
+  },
+
+  /* How to ask "which of these?" for a capability. Only needed where more than
+   * one thing can provide it, but kept complete so a new piece of equipment
+   * cannot silently produce an unlabelled question. */
+  capLabels: {
+    "hang-high": "hang from",
+    "hang-high-adjustable": "hang from",
+    "grip-chest": "grip at chest",
+    "dip-support": "dip on",
+    "dip-support-adjustable": "dip on",
+    "handles-hanging": "handles",
+    "handles-low": "heels in",
+    "handles-floor": "hands on",
+    steady: "steady on",
+    "step-20": "20 cm step",
+    "step-45": "45 cm step",
+  },
+
   stationOrder: ["rings-full", "rings-chest", "rings-dip", "rings-low", "floor"],
 
+  /* A station is a rig height: a group of exercises you do before touching the
+   * straps again. The `label` describes the rig, which is only meaningful where
+   * there IS one — everywhere else `plain` names the role instead, so a park or
+   * a hotel room does not announce rings that are not there. */
   stations: {
     "rings-full": {
+      plain: "Overhead",
       label: "Rings overhead",
       icon: "⬆️",
       setup:
@@ -68,6 +192,7 @@ window.PROGRAM = {
       adjust: true,
     },
     "rings-chest": {
+      plain: "Chest height",
       label: "Rings at chest",
       icon: "↔️",
       setup:
@@ -75,6 +200,7 @@ window.PROGRAM = {
       adjust: true,
     },
     "rings-dip": {
+      plain: "Seated dips",
       label: "Rings for seated dips",
       icon: "🔻",
       setup:
@@ -87,6 +213,7 @@ window.PROGRAM = {
       adjust: true,
     },
     "rings-low": {
+      plain: "At floor level",
       label: "Rings on the floor",
       icon: "🔽",
       setup:
@@ -172,7 +299,7 @@ window.PROGRAM = {
       name: "Movement prep",
       search: "bodyweight good morning and dynamic warm up form",
       station: "rings-full",
-      pattern: "prehab",
+      pattern: "prehab-warmup",
       sets: 1,
       trimPriority: 0,
       minSets: 1,
@@ -180,7 +307,7 @@ window.PROGRAM = {
       range: [180, 180],
       step: 30,
       rest: 30,
-      kit: [],
+      needs: [],
       progression: "fixed",
       ladder: [{ name: "Same every session" }],
       cues: [
@@ -201,9 +328,9 @@ window.PROGRAM = {
     /* ---------------------------------------------------------------- */
     "dead-hang": {
       name: "Dead hang",
-      search: "dead hang gymnastic rings shoulder",
+      search: "dead hang form shoulder",
       station: "rings-full",
-      pattern: "prehab",
+      pattern: "prehab-hang",
       sets: 1,
       trimPriority: 0,
       minSets: 1,
@@ -211,12 +338,12 @@ window.PROGRAM = {
       range: [20, 45],
       step: 5,
       rest: 30,
-      kit: ["rings"],
+      needs: ["hang-high-adjustable"],
       progression: "ladder",
       ladder: [
         { name: "Toes lightly down", note: "Take some weight off through the legs" },
-        { name: "Full hang" },
-        { name: "Full hang, shoulders relaxed", note: "Let the shoulders rise — the deepest range" },
+        { name: "Full hang", needs: ["hang-high"], },
+        { name: "Full hang, shoulders relaxed", note: "Let the shoulders rise — the deepest range", needs: ["hang-high"], },
       ],
       cues: [
         "Let the shoulders relax up towards your ears — this is a stretch, not a hold",
@@ -238,11 +365,11 @@ window.PROGRAM = {
         "better there, and if it ever pinches rather than stretches, take weight back onto the legs.",
     },
     "ring-scap-pull": {
-      name: "Ring scap pulls",
-      search: "scapular pull ups rings tutorial",
+      name: "Scap pulls",
+      search: "scapular pull ups tutorial",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/0688.gif",
       station: "rings-full",
-      pattern: "prehab",
+      pattern: "prehab-scap",
       sets: 1,
       trimPriority: 0,
       minSets: 1,
@@ -250,12 +377,12 @@ window.PROGRAM = {
       range: [8, 12],
       step: 1,
       rest: 30,
-      kit: ["rings"],
+      needs: ["hang-high-adjustable"],
       progression: "ladder",
       ladder: [
         { name: "Standing, nearly upright", note: "Feet well under you — lightest" },
         { name: "Leaning back" },
-        { name: "Full hang" },
+        { name: "Full hang", needs: ["hang-high"], },
       ],
       cues: [
         "Arms stay completely straight — only the shoulder blades move",
@@ -266,10 +393,10 @@ window.PROGRAM = {
         "Same job as band pull-aparts, at a station already set up, with body angle as the dial.",
     },
     "ring-pullup": {
-      name: "Ring pull-ups",
-      search: "ring pull ups form tutorial",
+      name: "Pull-ups",
+      search: "pull ups form tutorial",
       station: "rings-full",
-      pattern: "pull",
+      pattern: "pull-vertical",
       sets: 3,
       trimPriority: 1,
       minSets: 2,
@@ -277,17 +404,17 @@ window.PROGRAM = {
       range: [6, 8],
       step: 1,
       rest: 150,
-      kit: ["rings"],
+      needs: ["hang-high-adjustable"],
       progression: "ladder-then-vest",
       ladder: [
         { name: "Feet assisted, heavy", note: "Legs straight, toes down, taking a real share of the weight" },
         { name: "Feet assisted, light", note: "Toes down but barely pushing — just enough to finish the rep" },
-        { name: "Bodyweight", note: "Knees bent, ankles crossed, feet clear of the floor" },
+        { name: "Bodyweight", note: "Knees bent, ankles crossed, feet clear of the floor", needs: ["hang-high"], },
       ],
       cues: [
         "Dead hang at the bottom — arms fully straight, shoulders unpacked",
-        "Rings turned out at the top",
-        "Pull the elbows down and back, chest toward the rings",
+        "Hands turned out at the top, if what you are on lets them",
+        "Pull the elbows down and back, chest toward your hands",
         "Three seconds down — the lowering is where the tendons adapt",
       ],
       why:
@@ -295,11 +422,11 @@ window.PROGRAM = {
         "much kinder than a fixed bar after a layoff, at the cost of a couple of reps from the instability.",
     },
     "ring-chinup": {
-      name: "Ring chin-ups",
-      search: "ring chin ups form tutorial",
+      name: "Chin-ups",
+      search: "chin ups form tutorial",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/1326.gif",
       station: "rings-full",
-      pattern: "pull",
+      pattern: "pull-vertical",
       sets: 3,
       trimPriority: 1,
       minSets: 2,
@@ -307,16 +434,16 @@ window.PROGRAM = {
       range: [6, 8],
       step: 1,
       rest: 150,
-      kit: ["rings"],
+      needs: ["hang-high-adjustable"],
       progression: "ladder-then-vest",
       ladder: [
         { name: "Feet assisted, heavy", note: "Legs straight, toes down, taking a real share of the weight" },
         { name: "Feet assisted, light", note: "Toes down but barely pushing — just enough to finish the rep" },
-        { name: "Bodyweight" },
+        { name: "Bodyweight", needs: ["hang-high"], },
       ],
       cues: [
-        "Start supinated — palms toward you — and let the rings rotate as you pull",
-        "Do not fight the rotation, that freedom is the whole point of rings",
+        "Start supinated — palms toward you",
+        "On rings, let them rotate as you pull — do not fight it. On a fixed bar there is nothing to rotate",
       ],
       why:
         "Same movement as the pull-up biased toward the biceps and lower lats. Alternating grips across " +
@@ -327,7 +454,7 @@ window.PROGRAM = {
       search: "hanging leg raise progression form",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/0472.gif",
       station: "rings-full",
-      pattern: "core",
+      pattern: "core-hip-flexion",
       sets: 3,
       trimPriority: 5,
       minSets: 2,
@@ -335,7 +462,7 @@ window.PROGRAM = {
       range: [8, 10],
       step: 1,
       rest: 75,
-      kit: ["rings"],
+      needs: ["hang-high"],
       progression: "ladder",
       ladder: [
         { name: "Knee tucks", note: "Knees to chest, feet stay low" },
@@ -361,10 +488,10 @@ window.PROGRAM = {
     /* Rings at chest                                                    */
     /* ---------------------------------------------------------------- */
     "ring-facepull": {
-      name: "Ring face pulls",
+      name: "Face pulls",
       search: "TRX face pull form tutorial",
       station: "rings-chest",
-      pattern: "prehab",
+      pattern: "prehab-rear-delt",
       sets: 2,
       trimPriority: 8,
       minSets: 1,
@@ -373,10 +500,10 @@ window.PROGRAM = {
       step: 2,
       rest: 45,
       superset: "prehab-pair",
-      kit: ["rings"],
+      needs: ["grip-chest"],
       progression: "ladder",
       ladder: [
-        { name: "Almost upright", note: "Feet under the rings — lightest" },
+        { name: "Almost upright", note: "Feet under your hands — lightest" },
         { name: "Feet walked forward" },
         { name: "Body at 45 degrees" },
         { name: "Body horizontal" },
@@ -392,11 +519,11 @@ window.PROGRAM = {
         "and body angle loads it continuously instead of in band-tension steps.",
     },
     "ring-row": {
-      name: "Ring rows",
-      search: "ring rows inverted row form tutorial",
+      name: "Inverted rows",
+      search: "inverted row form tutorial",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/0808.gif",
       station: "rings-chest",
-      pattern: "pull",
+      pattern: "pull-horizontal",
       sets: 3,
       trimPriority: 2,
       minSets: 2,
@@ -405,29 +532,29 @@ window.PROGRAM = {
       step: 1,
       rest: 90,
       superset: "chest-pair",
-      kit: ["rings"],
+      needs: ["grip-chest"],
       progression: "ladder-then-vest",
       ladder: [
         { name: "Feet under the rings", note: "Torso upright — the easiest angle" },
         { name: "Feet walked forward", note: "Roughly 45°" },
         { name: "Body horizontal", note: "Heels on the floor, straight line ankle to ear" },
-        { name: "Heels on the sofa chair", note: "20 cm", kit: ["rings", "sofa"] },
-        { name: "Heels on the chair", note: "45 cm — hips above shoulders", kit: ["rings", "chair"] },
+        { name: "Heels on the sofa chair", note: "20 cm", needs: ["grip-chest", "step-20"], },
+        { name: "Heels on the chair", note: "45 cm — hips above shoulders", needs: ["grip-chest", "step-45"], },
       ],
       cues: [
         "Squeeze the glutes — the body is a plank, no hip sag",
-        "Pull the rings to the lower ribs, elbows close, pause for a beat",
+        "Pull to the lower ribs, elbows close, pause for a beat",
       ],
       why:
         "The horizontal pull. Feet elevation is the built-in progression, which is exactly why this " +
         "exercise never needs the rings moved — walk the feet out, then put them on a box.",
     },
     "ring-dip": {
-      name: "Ring dips",
-      search: "ring dips beginner progression tutorial",
+      name: "Dips",
+      search: "dips beginner progression tutorial",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/0677.gif",
       station: "rings-chest",
-      pattern: "push",
+      pattern: "push-dip",
       sets: 3,
       trimPriority: 1,
       minSets: 2,
@@ -436,7 +563,7 @@ window.PROGRAM = {
       step: 1,
       rest: 150,
       superset: "chest-pair",
-      kit: ["rings"],
+      needs: ["dip-support-adjustable"],
       progression: "ladder-then-vest",
       ladder: [
         /* Started seated, in an L. Rings at seated-shoulder height, legs
@@ -470,33 +597,35 @@ window.PROGRAM = {
           name: "Seated, heels on the sofa chair",
           note: "20 cm — more of you goes onto the arms",
           station: "rings-dip",
-          kit: ["rings", "sofa"],
+
           image: "images/ring-dip.svg",
           cues: [
             "Same position, heels up on the 20 cm sofa chair instead of the floor",
             "Raising the feet shifts weight off the legs and onto the arms — that is the whole step",
             "Legs stay straight; the heels rest, they do not press hard",
           ],
+          needs: ["dip-support-adjustable", "step-20"],
         },
         {
           name: "Seated, heels on the chair",
           note: "45 cm — nearly all of you is on the arms now",
           station: "rings-dip",
-          kit: ["rings", "chair"],
           image: "images/ring-dip.svg",
           cues: [
             "Heels on the 45 cm chair. At lockout your feet are level with your hips",
             "Almost all of your weight is on the arms; the feet are for balance",
             "When this stops being hard, the rings go back up and the feet come off entirely",
           ],
+          needs: ["dip-support-adjustable", "step-45"],
         },
         {
           name: "Bodyweight, to parallel",
           note: "Rings back up to chest height — feet clear, upper arm to parallel",
           addCues: [
-            "Rings at sternum again. Knees bent, ankles crossed, feet clear for the whole set",
+            "Back to a normal dip height. Knees bent, ankles crossed, feet clear for the whole set",
             "Cannot reach parallel unassisted? Go back a level. Range is earned before load",
           ],
+          needs: ["dip-support"],
         },
         {
           /* Depth is the last thing earned before the vest, and it is the one
@@ -512,6 +641,7 @@ window.PROGRAM = {
             "Stop where the shoulder is comfortable — that is your depth, not a number someone else picked",
             "Any pinch rather than a stretch at the bottom: back up to parallel and stay there a fortnight",
           ],
+          needs: ["dip-support"],
         },
       ],
       cues: [
@@ -519,7 +649,7 @@ window.PROGRAM = {
          * partial-range unassisted dip felt like progress when it was not. */
         "A rep counts only if the upper arm reaches PARALLEL to the floor. Higher is not a short rep, it is a different exercise",
         "Parallel is the target AND the ceiling until the last rung opens in Phase 3 — then depth becomes the progression",
-        "Rings pressed against the sides at lockout and turned out",
+        "Hands pressed against the sides at lockout, turned out if they can be",
         "Shoulders down and back the whole time — never let them shrug up at the bottom",
       ],
       why:
@@ -553,11 +683,11 @@ window.PROGRAM = {
       warn: true,
     },
     "ring-fallout": {
-      name: "Ring fallouts (anti-extension plank)",
+      name: "Fallouts",
       search: "TRX fallout anti extension core exercise",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/0805.gif",
       station: "rings-chest",
-      pattern: "core",
+      pattern: "core-anti-extension",
       sets: 3,
       trimPriority: 6,
       minSets: 2,
@@ -565,7 +695,7 @@ window.PROGRAM = {
       range: [20, 30],
       step: 5,
       rest: 60,
-      kit: ["rings"],
+      needs: ["handles-hanging"],
       progression: "ladder",
       ladder: [
         { name: "Feet close, torso steep", note: "Nearly upright — easiest" },
@@ -591,14 +721,55 @@ window.PROGRAM = {
       correction: true,
     },
 
+    /* Not in either workout's order. It exists so that anti-extension has an
+     * answer in a room with no rings — the resolver reaches for it by pattern
+     * when the fallout cannot be done. Needs nothing at all, anywhere. */
+    plank: {
+      name: "Front plank",
+      search: "front plank long lever form tutorial",
+      image: "images/plank.svg",
+      station: "floor",
+      pattern: "core-anti-extension",
+      sets: 3,
+      trimPriority: 6,
+      minSets: 2,
+      metric: "seconds",
+      range: [20, 45],
+      step: 5,
+      rest: 60,
+      needs: [],
+      progression: "ladder",
+      ladder: [
+        { name: "Knees down", note: "Elbows under the shoulders" },
+        { name: "Full plank", note: "Elbows under the shoulders, toes down" },
+        { name: "Elbows a hand ahead", note: "One hand-length forward — the lever starts" },
+        { name: "Elbows fully ahead", note: "Arms extended forward, as far as you can hold" },
+      ],
+      cues: [
+        "Elbows under the shoulders to start; sliding them FORWARD is the entire progression",
+        "Ribs down and glutes tight — the lower back must not arch. That is the whole exercise",
+        "Squeeze as if bracing for a punch rather than just lying there propped up",
+        "The moment the hips sag or the back arches, the set is over. Time held with a sag is not time",
+      ],
+      why:
+        "The same job as the ring fallouts — stopping your spine extending while the shoulders are " +
+        "loaded — done with nothing but a floor. It exists because anti-extension is the one core " +
+        "pattern this program has no answer for away from the rings, and a pattern with no answer is " +
+        "a hole in the week rather than a missing exercise.",
+      note:
+        "Progressed by LEVER, not by time. Adding minutes to a plank stops being useful quickly; " +
+        "sliding the elbows forward keeps it hard at 20-45 seconds, which is the range that trains " +
+        "something. If you are holding a level for over a minute, you are on the wrong level.",
+    },
+
     /* ---------------------------------------------------------------- */
     /* Floor                                                             */
     /* ---------------------------------------------------------------- */
     pushup: {
-      name: "Push-ups (on bars)",
-      search: "push up parallettes handles form",
+      name: "Push-ups",
+      search: "push up form tutorial",
       station: "floor",
-      pattern: "push",
+      pattern: "push-horizontal",
       sets: 3,
       trimPriority: 7,
       minSets: 2,
@@ -606,27 +777,40 @@ window.PROGRAM = {
       range: [10, 12],
       step: 1,
       rest: 90,
-      kit: ["bars"],
+      /* The bars are a RANGE bonus, not a requirement. Requiring them meant a
+       * park had no horizontal push at all, which is absurd — the body position
+       * is the load, and the hands being raised just lets the chest travel
+       * further. Ladder positions are unchanged, so nothing has to migrate. */
+      needs: [],
       progression: "ladder-then-vest",
       ladder: [
-        { name: "Hands on bars, knees down" },
-        { name: "Hands on bars, full" },
-        { name: "Feet on the sofa chair", note: "20 cm", kit: ["bars", "sofa"] },
-        { name: "Feet on the chair", note: "45 cm", kit: ["bars", "chair"] },
+        {
+          name: "Knees down",
+          note: "On the push-up bars if you have them",
+          addCues: ["No bars? Hands on the floor. You lose a little range, not the exercise"],
+        },
+        {
+          name: "Full",
+          note: "On the push-up bars if you have them",
+          addCues: ["No bars? Hands on the floor. You lose a little range, not the exercise"],
+        },
+        { name: "Feet on the sofa chair", note: "20 cm", needs: ["step-20"], },
+        { name: "Feet on the chair", note: "45 cm", needs: ["step-45"], },
         {
           name: "Rings on the floor",
           note: "Hands in the rings — instability on top of the deficit",
-          kit: ["rings"],
+
           cues: [
             "Rings turned out at the top and pressed in against the ribs",
             "Fight the rings drifting apart — that is most of the work here",
             "Elbows at roughly 45° to the body, not flared to 90°",
             "Expect to lose several reps to the instability; that is the point",
           ],
+          needs: ["handles-low"],
         },
       ],
       cues: [
-        "The bars let the chest drop below the hands — use that range, it is why they exist",
+        "If you are on the bars, let the chest drop BELOW the hands — that range is why they exist",
         "Elbows at roughly 45° to the body, not flared to 90°",
       ],
       note:
@@ -643,7 +827,7 @@ window.PROGRAM = {
       name: "Split squats",
       search: "bulgarian split squat form tutorial",
       station: "rings-chest",
-      pattern: "legs",
+      pattern: "legs-knee",
       sets: 3,
       trimPriority: 4,
       minSets: 2,
@@ -652,7 +836,7 @@ window.PROGRAM = {
       step: 1,
       rest: 90,
       superset: "prehab-pair",
-      kit: [],
+      needs: [],
       progression: "ladder-then-vest",
       ladder: [
         {
@@ -665,29 +849,29 @@ window.PROGRAM = {
             "Arms out in front as a counterweight if that helps you stay upright",
           ],
         },
-        { name: "Split squat", note: "Fingertips on the rings for balance only", kit: ["rings"], perSide: true },
-        { name: "Rear foot on the sofa chair", note: "20 cm — the same movement as level 4, on a lower step", kit: ["rings", "sofa"], image: "images/split-squat-L4.gif", perSide: true },
-        { name: "Rear foot on the chair", note: "45 cm — the full Bulgarian split squat", kit: ["rings", "chair"], perSide: true },
+        { name: "Split squat", note: "Fingertips on the rings for balance only", perSide: true, needs: ["steady"], },
+        { name: "Rear foot on the sofa chair", note: "20 cm — the same movement as level 4, on a lower step", image: "images/split-squat-L4.gif", perSide: true, needs: ["steady", "step-20"], },
+        { name: "Rear foot on the chair", note: "45 cm — the full Bulgarian split squat", perSide: true, needs: ["steady", "step-45"], },
         /* A pistol is a different exercise that happens to share this ladder,
          * so it carries its own range: 10-15 per side is a prescription nobody
          * would write for one, and it was only ever inherited. */
         {
           name: "Ring-assisted pistol",
           note: "Hold the rings, one leg, full depth",
-          kit: ["rings"],
           perSide: true,
           range: [6, 10],
           cues: [
             "Free leg straight out in front, heel off the floor the whole rep",
             "Sit BACK, not down — the hips travel behind the heel, then under it",
-            "Working heel stays flat; if it lifts, take more weight through the rings",
-            "Pull on the rings only as much as you need to — that is the load dial",
+            "Working heel stays flat; if it lifts, take more weight through your hands",
+            "Pull on your support only as much as you need to — that is the load dial",
           ],
+          needs: ["steady"],
         },
       ],
       cues: [
         "Front shin roughly vertical, back knee down to just off the floor",
-        "The rings are for balance, not for pulling yourself up — fingertips only",
+        "Whatever you are holding is for balance, not for pulling yourself up — fingertips only",
         "Both sides back to back, then rest once",
       ],
       why:
@@ -695,11 +879,126 @@ window.PROGRAM = {
         "two-leg squats have stopped being hard, and the chest-height rings give exactly the light " +
         "balance support that makes deep ranges trainable.",
     },
+    /* The answer to the one pattern nothing away from home could train. A
+     * towel on a hard floor is not equipment in any sense the app models, so
+     * this needs nothing at all — which makes knee flexion the last pattern to
+     * become possible in a park, a gym and an empty hotel room. Unscheduled,
+     * so it shows up as a choice against the ring curl rather than replacing
+     * it: the ring version loads the hamstring harder and stays the default
+     * wherever there are handles. */
+    "slider-leg-curl": {
+      name: "Slider leg curls",
+      search: "towel slider hamstring curl form tutorial",
+      station: "floor",
+      pattern: "legs-knee-flexion",
+      sets: 3,
+      trimPriority: 2,
+      minSets: 2,
+      metric: "reps",
+      range: [8, 12],
+      step: 1,
+      rest: 90,
+      needs: [],
+      progression: "ladder",
+      ladder: [
+        { name: "Both legs, hips low", note: "Hips just off the floor, heels slide a short way" },
+        { name: "Both legs, hips bridged", note: "Hips stay up, heels slide to about half range" },
+        { name: "Both legs, full range", note: "Heels all the way out to straight legs, hips still up" },
+        { name: "Full range, 3 s out", note: "Three seconds sliding out, pull back in normally" },
+        {
+          name: "One leg",
+          note: "Free leg held straight up",
+          perSide: true,
+          addCues: ["Free leg held straight up, hips square — do not let the working side rotate"],
+        },
+      ],
+      cues: [
+        "A towel under the heels on a hard floor, or socks on laminate — anything that slides",
+        "Flat on your back, drive the hips up BEFORE the first rep",
+        "Hips stay high the whole set — the moment they drop, the set is over",
+        "Pull with the hamstrings, not by yanking the hips",
+      ],
+      why:
+        "Knee flexion with nothing but a floor and a towel. Less loading than the ring version — your " +
+        "heels stay on the ground rather than hanging — but it is the difference between training the " +
+        "hamstrings away from home and not training them at all.",
+      note:
+        "Carpet will not slide. If the floor fights you, use the ring curl instead — that is what the " +
+        "swap on this card is for.",
+    },
+
+    /* Push-horizontal is the second-highest volume pattern in the week, so it
+     * is one of the places variety is genuinely free. Close hands is a real
+     * change of emphasis rather than the same push-up renamed. */
+    "diamond-pushup": {
+      name: "Close-grip push-ups",
+      search: "diamond close grip push up form tutorial",
+      station: "floor",
+      pattern: "push-horizontal",
+      sets: 3,
+      trimPriority: 7,
+      minSets: 2,
+      metric: "reps",
+      range: [8, 12],
+      step: 1,
+      rest: 90,
+      needs: [],
+      progression: "ladder-then-vest",
+      ladder: [
+        { name: "Knees down", note: "Hands close, index fingers and thumbs touching" },
+        { name: "Full" },
+        { name: "Feet on the sofa chair", note: "20 cm", needs: ["step-20"] },
+        { name: "Feet on the chair", note: "45 cm", needs: ["step-45"] },
+      ],
+      cues: [
+        "Hands under the sternum, index fingers and thumbs touching",
+        "Elbows stay tight to the ribs — that is the whole point of the grip",
+        "Wrists sore? Turn the hands slightly out, or make a smaller triangle rather than a full diamond",
+      ],
+      why:
+        "The same horizontal push biased hard toward the triceps and the inner chest. Expect several " +
+        "fewer reps than a normal push-up at the same level — it is a different exercise, not an easier one.",
+    },
+
+    /* Pull-horizontal is the joint-highest volume pattern. Archer rows are the
+     * honest variant: unilateral, so each side gets a much larger share of the
+     * load without needing a single thing added to the room. */
+    "archer-row": {
+      name: "Archer rows",
+      search: "archer inverted row form tutorial",
+      station: "rings-chest",
+      pattern: "pull-horizontal",
+      sets: 3,
+      trimPriority: 2,
+      minSets: 2,
+      metric: "reps",
+      range: [6, 10],
+      step: 1,
+      rest: 90,
+      needs: ["grip-chest"],
+      progression: "ladder",
+      perSide: true,
+      ladder: [
+        { name: "Feet under, slight reach", note: "Torso upright — the free arm only just straightens" },
+        { name: "Feet walked forward", note: "Roughly 45°, free arm straight" },
+        { name: "Body horizontal", note: "Heels on the floor, free arm straight out to the side" },
+        { name: "Heels on the sofa chair", note: "20 cm", needs: ["grip-chest", "step-20"] },
+      ],
+      cues: [
+        "Pull to ONE side — the working elbow goes to that hip, the other arm straightens out sideways",
+        "The free arm is a guide, not a second pull: keep it straight and light",
+        "Shoulders stay square to the ceiling; the temptation is to roll away from the working side",
+      ],
+      why:
+        "The horizontal pull with most of the load on one side at a time, which is how you keep making " +
+        "it harder once body-horizontal rows stop being difficult and before a vest is worth it.",
+    },
+
     "hip-thrust": {
       name: "Hip thrusts",
       search: "hip thrust bench form tutorial",
       station: "floor",
-      pattern: "legs",
+      pattern: "legs-hip",
       sets: 3,
       trimPriority: 4,
       minSets: 2,
@@ -707,7 +1006,7 @@ window.PROGRAM = {
       range: [10, 15],
       step: 1,
       rest: 90,
-      kit: [],
+      needs: [],
       progression: "ladder-then-vest",
       ladder: [
         {
@@ -720,16 +1019,16 @@ window.PROGRAM = {
             "Shoulders stay on the floor; nothing here needs a chair yet",
           ],
         },
-        { name: "Feet on the sofa chair", note: "20 cm — both legs, longer range", kit: ["sofa"], image: "https://raw.githubusercontent.com/Th0masL/exercises-dataset/main/videos/3523-aWedzZX.gif" },
-        { name: "Shoulders on the chair", note: "45 cm — the real hip thrust, shoulder blades on the edge", kit: ["chair"] },
+        { name: "Feet on the sofa chair", note: "20 cm — both legs, longer range", image: "https://raw.githubusercontent.com/Th0masL/exercises-dataset/main/videos/3523-aWedzZX.gif", needs: ["step-20"], },
+        { name: "Shoulders on the chair", note: "45 cm — the real hip thrust, shoulder blades on the edge", needs: ["step-45"], },
         {
           name: "Shoulders on the chair, one leg",
-          kit: ["chair"],
           perSide: true,
           addCues: [
             "Free leg tucked to the chest, not dangling — it keeps the pelvis level",
             "Hips must stay square: if one side drops, the set is over",
           ],
+          needs: ["step-45"],
         },
       ],
       cues: [
@@ -744,10 +1043,10 @@ window.PROGRAM = {
         "way beyond what a floor glute bridge can give you.",
     },
     "ring-leg-curl": {
-      name: "Ring leg curls",
+      name: "Leg curls",
       search: "TRX hamstring curl form tutorial",
       station: "rings-low",
-      pattern: "legs",
+      pattern: "legs-knee-flexion",
       sets: 3,
       trimPriority: 2,
       minSets: 2,
@@ -755,7 +1054,7 @@ window.PROGRAM = {
       range: [8, 12],
       step: 1,
       rest: 90,
-      kit: ["rings"],
+      needs: ["handles-low"],
       progression: "ladder",
       ladder: [
         { name: "Knees bent, hips low", note: "Short lever, partial range — the way in" },
@@ -787,7 +1086,7 @@ window.PROGRAM = {
       name: "Pike push-ups",
       search: "pike push up form progression tutorial",
       station: "floor",
-      pattern: "push",
+      pattern: "push-vertical",
       sets: 3,
       trimPriority: 3,
       minSets: 2,
@@ -795,17 +1094,20 @@ window.PROGRAM = {
       range: [6, 10],
       step: 1,
       rest: 90,
-      kit: ["bars"],
+      /* Hands flat on the floor is the normal way to do this. The bars only
+       * matter at the top rung, where the point is the deficit. */
+      needs: [],
       progression: "ladder-then-vest",
       ladder: [
-        { name: "Feet on the floor", note: "Hips high, an inverted V" },
-        { name: "Feet on the sofa chair", note: "20 cm — hips stack further over the shoulders", kit: ["bars", "sofa"] },
-        { name: "Feet on the chair", note: "45 cm — close to vertical", kit: ["bars", "chair"] },
+        { name: "Feet on the floor", note: "Hips high, an inverted V — hands flat, no bars needed" },
+        { name: "Feet on the sofa chair", note: "20 cm — hips stack further over the shoulders", needs: ["step-20"], },
+        { name: "Feet on the chair", note: "45 cm — close to vertical", needs: ["step-45"], },
         {
           name: "Feet on the chair, on the bars",
           note: "Deficit — the head drops below the hands",
-          kit: ["bars", "chair"],
+
           addCues: ["The bars are what makes this a deficit — use the extra range rather than stopping short"],
+          needs: ["handles-floor", "step-45"],
         },
       ],
       cues: [
@@ -823,7 +1125,7 @@ window.PROGRAM = {
       search: "single leg calf raise form tutorial",
       image: "https://raw.githubusercontent.com/Th0masL/exercises-gifs/main/assets/1373.gif",
       station: "floor",
-      pattern: "legs",
+      pattern: "legs-calf",
       sets: 2,
       trimPriority: 9,
       minSets: 1,
@@ -831,7 +1133,7 @@ window.PROGRAM = {
       range: [12, 20],
       step: 2,
       rest: 60,
-      kit: [],
+      needs: [],
       progression: "ladder-then-vest",
       ladder: [
         { name: "Both legs, floor" },
@@ -871,6 +1173,13 @@ window.PROGRAM = {
         { id: "ring-facepull" },
         { id: "ring-row" },
         { id: "ring-dip" },
+        /* Overhead pressing was the one working pattern trained on a single day,
+         * at nine sets a fortnight against eighteen for the dip — and the dip is
+         * the movement most likely to bother a shoulder that never presses
+         * overhead. Two sets rather than three because the pull day is the one
+         * with room, and it takes the freshest floor slot for the same reason it
+         * does on the push day: it is the weakest pattern here. */
+        { id: "pike-pushup", setCount: 2 },
         /* Two sets only on the pull day — the chest already took three sets of
          * dips, and this is where the time for legs comes from. */
         { id: "pushup", setCount: 2 },

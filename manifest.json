@@ -1,7 +1,7 @@
 {
   "name": "Rings + Push-up Bars",
   "short_name": "Workout",
-  "description": "3x/week home program on rings, push-up bars and a weighted vest, with automatic progression.",
+  "description": "2–3x/week home program on rings, push-up bars and a weighted vest, with automatic progression.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

@@ -50,6 +50,12 @@
     return (ex.ladder ? ex.ladder.length : 1) - 1;
   }
 
+  /* The coarse family a movement pattern belongs to. Derived from the prefix so
+   * a new pattern needs no second place to register it. */
+  function groupOf(pattern) {
+    return String(pattern || "").split("-")[0] || "other";
+  }
+
   function usesVest(ex) {
     return ex.progression === "ladder-then-vest" || ex.progression === "vest";
   }
@@ -74,7 +80,9 @@
       /* A level that puts you in the rings must not still claim you need the
        * bars, so its own kit REPLACES the exercise default rather than adding
        * to it. Same for the picture. */
-      kit: r.kit || ex.kit || [],
+      /* What this level REQUIRES, as capabilities. Resolved to whatever the
+       * place you are in actually provides when it reaches the screen. */
+      needs: r.needs || ex.needs || [],
       /* Where the rings have to hang for THIS level. Assisted dips need them
        * low enough that the feet reach the floor; unassisted ones need them
        * high enough that the feet cannot. Those two windows do not overlap, so
@@ -157,6 +165,11 @@
     var e = entry || {};
     var s = normalizeState(ex, st);
     var lvl = clamp(s.level + (e.levelOffset || 0), 0, maxLevel(ex));
+    /* Somewhere without the equipment your level needs, come DOWN to the rung
+     * that works rather than dropping the exercise. You lose the progression
+     * for that session, not the movement. */
+    var wanted = lvl;
+    if (typeof e.levelHere === "number" && e.levelHere >= 0) lvl = e.levelHere;
     var r = rung(ex, lvl);
     var vest = phase && phase.allowLoadProgress === false ? 0 : s.vest;
     return {
@@ -175,8 +188,12 @@
           : null,
       cues: r.cues.slice(),
       offset: e.levelOffset || 0,
+      /* Where you actually are, when the room has moved you off it. Down is a
+       * substitution; up is the room forcing a harder rung because the easier
+       * one needs equipment that is not here. */
+      movedFrom: lvl !== wanted ? wanted : null,
       perSide: r.perSide,
-      kit: r.kit.slice(),
+      needs: r.needs.slice(),
       image: r.image,
       step: r.step,
       rest: r.rest,
@@ -614,6 +631,55 @@
     return { kind: "done" };
   }
 
+  /* Seconds still to come, from the first thing not yet done — and seconds
+   * already accounted for behind it.
+   *
+   * Both halves matter. The remainder is what you have left; the part behind
+   * you is what the model THOUGHT that took, which compared against the clock
+   * gives the pace you are actually working at. Estimating the rest of a
+   * session from a fixed model when you are running 30% slow is how you find
+   * out you are out of time by running out of time. */
+  function split(events, isDone) {
+    /* The line is drawn after the last set you actually did — not before the
+     * next one you owe. The transition and the rest that sit between them are
+     * still AHEAD of you: you have not walked over yet, and you have not rested
+     * yet. Attributing them backwards makes a session that has not started look
+     * like it is already 30 seconds in. */
+    var last = -1, pending = false;
+    for (var i = 0; i < events.length; i++) {
+      if (events[i].type !== "work") continue;
+      if (isDone(events[i].id, events[i].set)) last = i;
+      else pending = true;
+    }
+    var behind = 0, ahead = 0;
+    for (var j = 0; j < events.length; j++) {
+      if (j <= last) behind += events[j].seconds || 0;
+      else ahead += events[j].seconds || 0;
+    }
+    return { behind: Math.round(behind), ahead: Math.round(ahead), done: !pending };
+  }
+
+  /* How long the rest of this session will really take, given how the part you
+   * have done actually went. Clamped hard: two sets in, the ratio is noise, and
+   * a 4x projection from a slow first set helps nobody. */
+  function project(events, isDone, elapsedSeconds) {
+    var s = split(events, isDone);
+    var pace = 1;
+    /* Below a couple of minutes of modelled work there is not enough behind you
+     * to say anything about the pace. */
+    if (s.behind > 120 && elapsedSeconds > 0) {
+      pace = clamp(elapsedSeconds / s.behind, 0.6, 2);
+    }
+    return {
+      behind: s.behind,
+      ahead: s.ahead,
+      pace: Math.round(pace * 100) / 100,
+      remaining: Math.round(s.ahead * pace),
+      total: Math.round(elapsedSeconds + s.ahead * pace),
+      done: s.done,
+    };
+  }
+
   /* Shave one set at a time off the least important exercise that is still
    * above its floor, until the estimate fits. Cutting one set from each of
    * several exercises beats gutting one of them. */
@@ -645,6 +711,162 @@
 
     var seconds = estimate(work, opts);
     return { items: work, trimmed: trimmed, seconds: seconds, overBudget: seconds > budgetSeconds };
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Where you are today                                               */
+  /* ---------------------------------------------------------------- */
+
+  /* Everything a place can do, as a set of capabilities. */
+  /* cap -> the piece of equipment that will provide it today.
+   *
+   * `prefer` is cap -> token, and it only ever picks between things that are
+   * ALL present and ALL sufficient: with rings and a high bar both to hand,
+   * either does a chin-up, and which one is a preference rather than a
+   * constraint. Declaration order decides when nothing is preferred, which is
+   * why this used to silently answer "rings" for everything. */
+  function capabilities(place, equipment, prefer) {
+    var out = {};
+    var has = (place && place.has) || [];
+    has.forEach(function (token) {
+      var e = equipment[token];
+      if (!e) return;
+      (e.provides || []).forEach(function (cap) {
+        out[cap] = out[cap] || token;
+      });
+    });
+    if (prefer) {
+      Object.keys(prefer).forEach(function (cap) {
+        var want = prefer[cap];
+        if (!out[cap] || has.indexOf(want) < 0) return;
+        var e = equipment[want];
+        if (e && (e.provides || []).indexOf(cap) >= 0) out[cap] = want;
+      });
+    }
+    return out;
+  }
+
+  /* Everything present that could provide this capability. More than one means
+   * a choice exists; one or none means there is nothing to ask about. */
+  function providersFor(cap, place, equipment) {
+    return ((place && place.has) || []).filter(function (token) {
+      var e = equipment[token];
+      return !!e && (e.provides || []).indexOf(cap) >= 0;
+    });
+  }
+
+  function met(needs, caps) {
+    for (var i = 0; i < (needs || []).length; i++) {
+      if (!caps[needs[i]]) return false;
+    }
+    return true;
+  }
+
+  /* The level you can actually do HERE, nearest to the one you are on.
+   *
+   * Down first, because an easier rung is always a safe substitution. But it
+   * cannot only go down: requirements are not monotonic along a ladder. A dead
+   * hang with the toes down needs the bar at a height you CHOOSE, while a full
+   * hang needs only a bar — so in a park the easy rung is the impossible one
+   * and the harder rung is the one that works. Searching down and then up gets
+   * that right; capping alone silently produced a level nothing could satisfy.
+   *
+   * -1 when no rung on the ladder is possible here. */
+  function usableLevel(ex, level, caps) {
+    var top = maxLevel(ex);
+    var want = clamp(level, 0, top);
+    for (var d = want; d >= 0; d--) {
+      if (met(rung(ex, d).needs, caps)) return d;
+    }
+    for (var u = want + 1; u <= top; u++) {
+      if (met(rung(ex, u).needs, caps)) return u;
+    }
+    return -1;
+  }
+
+  /* Which concrete objects satisfy this level, here. `rings` at home,
+   * `high bar` in a park — the card names the thing in front of you. */
+  function kitFor(needs, caps, equipment) {
+    var seen = {}, out = [];
+    (needs || []).forEach(function (cap) {
+      var token = caps[cap];
+      if (!token || seen[token]) return;
+      seen[token] = 1;
+      out.push((equipment[token] && equipment[token].label) || token);
+    });
+    return out;
+  }
+
+  /* Something else that trains the same pattern and CAN be done here.
+   *
+   * The exercise was never the thing worth keeping — the pattern is. A room
+   * with no rings has not lost "ring fallouts", it has lost anti-extension,
+   * and a plank on the floor answers that. Preference is declaration order in
+   * the program, so the exercise you would rather do is the one written first.
+   *
+   * Progression state stays on the exercise, deliberately: a plank ladder and a
+   * fallout ladder are different progressions and carrying a level between them
+   * would be inventing a number. */
+  /* Every exercise that trains this pattern, can be done here, and is free to
+   * choose. substituteFor() answers "what INSTEAD" and is a last resort;
+   * this answers "what ELSE", which is a different and stricter question.
+   *
+   * `taken` is what the program already schedules elsewhere, and those are NOT
+   * free choices even though the pattern matches. Chin-ups and pull-ups are
+   * both vertical pulls, and either would rather be done than nothing if a
+   * place could only manage one — but a supinated grip pulls with the elbow
+   * flexors in a way a pronated one does not, which is exactly why the program
+   * puts one in A and the other in B. Offering them against each other would
+   * let you do chin-ups twice a week and never pronate, quietly deleting a
+   * movement the week was built around.
+   *
+   * A slot with one answer is not a choice, so a single-element list means no
+   * swap control at all. */
+  function alternativesFor(ex, exercises, caps, taken) {
+    var out = [];
+    Object.keys(exercises).forEach(function (id) {
+      var cand = exercises[id];
+      if (cand.pattern !== ex.pattern) return;
+      if (usableLevel(cand, maxLevel(cand), caps) < 0) return;
+      if (cand === ex) return out.unshift(id);
+      if (taken && taken[id]) return;
+      out.push(id);
+    });
+    return out;
+  }
+
+  function substituteFor(ex, exercises, caps) {
+    var ids = Object.keys(exercises);
+    for (var i = 0; i < ids.length; i++) {
+      var cand = exercises[ids[i]];
+      if (cand === ex || cand.pattern !== ex.pattern) continue;
+      if (usableLevel(cand, maxLevel(cand), caps) < 0) continue;
+      return ids[i];
+    }
+    return null;
+  }
+
+  /* Which movement PATTERNS this place cannot train at all.
+   *
+   * The exercise is not the thing you are trying to keep — the pattern is. A
+   * park with no push-up bars has not lost "push-ups", it has lost nothing,
+   * because a push-up on the floor trains the same thing. It HAS lost
+   * anti-extension, because every exercise that trains it needs rings. Those
+   * are completely different reports and only the second one matters. */
+  function gapsAt(order, exercises, caps) {
+    var wanted = {};
+    (order || []).forEach(function (o) {
+      var ex = exercises[o.id];
+      if (ex && ex.progression !== "fixed") wanted[ex.pattern] = true;
+    });
+    /* A pattern is covered if ANYTHING in the whole pool trains it here, not
+     * just the exercise the workout happens to name — otherwise a substitute
+     * that exists and works would still be reported as a hole. */
+    return Object.keys(wanted).filter(function (p) {
+      return !Object.keys(exercises).some(function (id) {
+        return exercises[id].pattern === p && usableLevel(exercises[id], maxLevel(exercises[id]), caps) >= 0;
+      });
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -690,7 +912,7 @@
   /* Bumping SCHEMA and adding a step here is the only supported way to change
    * the shape of what is stored. There used to be a `version` field that
    * nothing ever read, so any rename would have silently dropped data. */
-  var SCHEMA = 3;
+  var SCHEMA = 4;
 
   function migrate(raw, program) {
     var s = raw && typeof raw === "object" ? raw : {};
@@ -738,6 +960,27 @@
       }
     }
 
+    if (from < 4) {
+      /* v3 had two ways to say where you are: a named place, plus a separate
+       * hand-ticked list that only the placeless "anywhere" ever used. There is
+       * one list now, and a named place is just a button that fills it — so the
+       * stored place has to be resolved to the kit it stood for. */
+      var st = s.settings || (s.settings = {});
+      if (!Array.isArray(st.kit)) {
+        var places = (program && program.places) || {};
+        /* An unset place meant home, which is what the app fell back to. It
+         * must keep meaning home: resolving it to an empty list would silently
+         * strip every exercise that needs equipment. */
+        var was = places[st.place] || places[Object.keys(places)[0]];
+        st.kit = (st.place === "anywhere" && Array.isArray(st.customKit)
+          ? st.customKit
+          : (was && was.has) || []
+        ).slice();
+      }
+      delete st.place;
+      delete st.customKit;
+    }
+
     s.version = SCHEMA;
     return { state: s, from: from, migrated: from !== SCHEMA, notes: notes };
   }
@@ -759,6 +1002,57 @@
     }
     for (var j = 0; j < vs.length; j++) if (!/espeak/i.test(vs[j].name || "")) return vs[j];
     return vs[0];
+  }
+
+  /* What the last `days` days actually delivered, by movement pattern, against
+   * what one A + one B would have.
+   *
+   * The export from two real sessions showed legs getting 5 sets of 11 — every
+   * hip-dominant set missing, because the three exercises that provide them sit
+   * at the end of workout B and fell off when the clock ran out. Nothing in the
+   * app said so. A total volume number would not have said so either; only
+   * splitting it by pattern does. */
+  function coverage(opts) {
+    var sessions = opts.sessions || [];
+    var exercises = opts.exercises || {};
+    var since = opts.since || "";
+    var got = {}, planned = {};
+
+    (opts.workouts || []).forEach(function (order) {
+      order.forEach(function (o) {
+        var ex = exercises[o.id];
+        if (!ex || ex.progression === "fixed") return;
+        planned[ex.pattern] = (planned[ex.pattern] || 0) + (o.setCount || ex.sets);
+      });
+    });
+
+    sessions.forEach(function (s) {
+      if (since && s.date < since) return;
+      Object.keys(s.entries || {}).forEach(function (id) {
+        var ex = exercises[id];
+        if (!ex || ex.progression === "fixed") return;
+        got[ex.pattern] = (got[ex.pattern] || 0) + s.entries[id].sets.length;
+      });
+    });
+
+    return Object.keys(planned)
+      .map(function (p) {
+        return {
+          pattern: p,
+          group: groupOf(p),
+          got: got[p] || 0,
+          planned: planned[p],
+          /* Anything below about two thirds of the intended volume is the
+           * signal worth acting on; below a third is effectively untrained. */
+          state: (got[p] || 0) >= planned[p] ? "met"
+            : (got[p] || 0) * 3 >= planned[p] * 2 ? "short"
+            : "missed",
+        };
+      })
+      .sort(function (a, b) {
+        return a.group === b.group ? a.pattern.localeCompare(b.pattern)
+          : a.group.localeCompare(b.group);
+      });
   }
 
   /* ---------------------------------------------------------------- */
@@ -820,6 +1114,15 @@
     DEFAULT_RULES: DEFAULT_RULES,
     SCHEMA: SCHEMA,
     rung: rung,
+    groupOf: groupOf,
+    capabilities: capabilities,
+    providersFor: providersFor,
+    usableLevel: usableLevel,
+    gapsAt: gapsAt,
+    substituteFor: substituteFor,
+    alternativesFor: alternativesFor,
+    kitFor: kitFor,
+    coverage: coverage,
     initialState: initialState,
     normalizeState: normalizeState,
     target: target,
@@ -831,6 +1134,8 @@
     timeline: timeline,
     estimate: estimate,
     restForId: restForId,
+    split: split,
+    project: project,
     nextUp: nextUp,
     fit: fit,
     imageCandidates: imageCandidates,

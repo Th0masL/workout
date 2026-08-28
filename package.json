@@ -1,0 +1,13 @@
+{
+  "name": "workout-tracker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/all.mjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1"
+  }
+}

@@ -30,21 +30,29 @@ local ones included. Serve over https for the real thing.
 runs offline — useful when the wifi drops mid-session. Your training data was never online anyway;
 it lives in localStorage, which the cache never touches.
 
-**Illustrations are precached in the background** once the worker activates, rather than on first
-view. Caching them lazily meant any exercise whose ⓘ panel you had never opened had no picture
-offline — patchy in a way that looked like a bug because it was one. They stay out of the install
-list so 2.4 MB never delays startup.
+**Illustrations are precached in the background** after the active worker receives a request from
+the page, rather than on first view. The work is attached to that message event with `waitUntil`,
+so the browser cannot terminate the worker halfway through. Caching them lazily meant any exercise
+whose ⓘ panel you had never opened had no picture offline — patchy in a way that looked like a bug
+because it was one. They stay out of the install list so 2.4 MB never delays startup; the **Data**
+tab reports whether the set is complete or whether some remote files need another connected retry.
 
 The offline fallback is **limited to navigations**. It used to hand `index.html` to anything that
 failed, so an uncached image received HTML with a 200, failed to decode, and vanished silently —
 indistinguishable from a missing file. Non-navigations now get a 504.
 
-The worker is deliberately **network-first with a cache fallback**, not cache-first: six small files
+The worker is deliberately **network-first with a cache fallback**, not cache-first: the small shell files
 cost nothing to re-fetch, and it means an edit shows up on the next reload instead of the one after.
+The network leg has a 2.5-second deadline, so a weak radio uses the cached screen promptly instead
+of behaving worse than a fully offline connection; the request continues in the background and
+refreshes the cache if it eventually succeeds.
 It also bypasses the browser's own HTTP cache on the network leg — without that, a host which sends
 no `Cache-Control` (`python -m http.server`, and plenty of static hosts) lets the browser apply
 heuristic freshness and serve stale bytes to the worker, which defeats the whole point. Bump
-`VERSION` in [sw.js](sw.js) to force every client to discard its cache.
+`VERSION` in [sw.js](sw.js) to force every client to discard its workout cache. Cache cleanup is
+restricted to the `workout-program-` namespace, because Cache Storage is shared with every other
+app on the same origin. The required shell installs atomically: if any boot file is unavailable,
+the previous complete worker stays in charge instead of activating a partial offline app.
 
 **The screen is kept awake for the length of a session**, via the Screen Wake Lock API. Two things
 are worth knowing, and the **Data** tab shows the live status so you never have to guess:
@@ -103,7 +111,7 @@ The variation is not supplementary detail — `Push-ups · 3 × 10` is an incomp
 level 1 is knees-down and level 4 is feet on a 45 cm chair. The `1/4` doubles as the only progress
 indicator on the card. Exercises with a single-level ladder show no level line at all.
 
-Three things earn an exception: the `PREP` tag, a `⇄ Ring rows` tag when an exercise is supersetted
+Three things earn an exception: the `PREP` tag, a `⇄ Inverted rows` tag when an exercise is supersetted
 (it changes how you run the session, not just how you perform the movement), and the one-line
 caution on ring dips.
 
@@ -267,7 +275,7 @@ on a phone set to another language the default voice reads the exercise names wi
 phonetics.
 
 A **🔊 button sits in the header on every tab** — one tap plays the beep and the spoken sample, and
-a toast reports what actually happened ("Beeped, then *Ring dips, set two*", or "Beeped — no voice
+a toast reports what actually happened ("Beeped, then *Dips, set two*", or "Beeped — no voice
 available in this browser"). It is there because sound is the one thing you cannot verify by
 looking, and because Bluetooth output needs waking before it behaves.
 
@@ -305,7 +313,7 @@ What it says:
 |---|---|
 | Session start | *"Workout A. Rings overhead"* |
 | 10 s left of a rest over 25 s | *"Ten seconds"* |
-| Rest ends | *"Ring dips, set 2, 6 reps"* — and *", 2 kilos"* if the vest is on |
+| Rest ends | *"Dips, set 2, 6 reps"* — and *", 2 kilos"* if the vest is on |
 | Mid-superset, no rest due | *"Ring face pulls, set 1, 12 reps, now"* |
 | Hold count-in | *"Get ready"*, then *"Go"* |
 | Every 10 s of a hold | *"10"*, *"20"*, *"30"* … past the target until you stop |
@@ -320,7 +328,7 @@ The beep still fires first in speak mode: the tone gets your attention, the word
 That matters most on the rings, where your hands are busy and the phone is on the floor.
 
 **Bluetooth wake-up.** A Bluetooth link idles between sounds and eats the first few hundred
-milliseconds when it wakes — the first beep of a set vanishes and "Ring dips" arrives as "ing dips".
+milliseconds when it wakes — the first beep of a set vanishes and "Dips" arrives as "ips".
 Every cue is therefore preceded by an **inaudible 120 Hz tone** that wakes the output, with the real
 sound scheduled behind it, giving one continuous signal and no gap to fall asleep in:
 
@@ -500,7 +508,7 @@ program:
 | Rings overhead | Dead hang | Movement prep, dead hang, scap pulls, pull-ups, chin-ups, hanging leg raises |
 | Rings at chest | Sternum | Split squats, face pulls, ring rows, ring dips, ring fallouts |
 | Rings on the floor | 20-25 cm | Ring leg curls *(day B only)* |
-| Floor | — | Push-ups on bars, pike push-ups, hip thrusts, calf raises |
+| Floor | — | Push-ups, pike push-ups, hip thrusts, calf raises |
 
 Sessions render in that order, which is also the order the rings physically travel — **downward
 only, never back up**. Day A needs two adjustments, day B three. Both asserted by tests.
@@ -537,6 +545,313 @@ an ordered list of difficulty **levels**, each a harder body position than the l
 further forward, feet on a box, less assistance from the legs. Climbing one level is how an exercise gets
 harder; the vest only comes in once the top level is reached.
 
+### Equipment is a capability, not an object
+
+`kit: ["rings"]` named an object, and that hid a distinction that matters: a **dead hang** does not
+need rings, it needs *something overhead to hang from* — a park bar does fine. A **feet-assisted**
+pull-up does need rings, because it needs that something to be at a height you choose.
+
+So equipment **provides** capabilities and each level **requires** them:
+
+```
+rings      hang-high, hang-high-adjustable, grip-chest, dip-support,
+           dip-support-adjustable, handles-hanging, handles-low, steady
+straps     hang-high, hang-high-adjustable, grip-chest, handles-hanging,
+           handles-low, steady        (rings by another name, minus the dip)
+high bar   hang-high
+low bar    grip-chest
+dip bars   dip-support
+bench      step-45, steady
+box        step-20, step-45
+```
+
+A **Where** picker sits above Time today. Switching to *Park* resolves the whole session against
+what is there: the chips name the object in front of you (`high bar`, not `rings`), and the rigging
+instructions disappear because nothing is rigged.
+
+Stations are named after a rig height — *Rings overhead*, *Rings at chest* — which is a lie in a
+place with no rings. The grouping still holds, because it is also the order you do things in, so
+away from a rig the station names the **role** instead: *Overhead*, *Chest height*, *At floor
+level*. Nothing on screen mentions rings you have not got.
+
+### Where you are is a list of equipment, not a named venue
+
+**There is one source of truth: the equipment you ticked.** A named place is a *button that fills
+that list*, not a mode. That distinction is the whole feature — while places were fixed lists in the
+program, "home, plus the high bar I just bought" was not expressible at all, and the only remedy was
+a commit. Presets that match no ticks show as `Custom` rather than lighting nothing, and tapping a
+preset **replaces** the list rather than adding to it, because tapping *Park* has to drop the rings
+or the session would still be planned around equipment you walked away from.
+
+Three presets cover the places you go often:
+
+| | equipment | patterns covered |
+|---|---|---|
+| **Home** | rings, push-up bars, sofa, chair | 14 / 14 |
+| **Park** | high bar, low bar, dip bars | 13 / 14 |
+| **Gym** | high bar, low bar, dip bars, bench, box | 13 / 14 |
+
+A gym is deliberately modelled as *a park with better furniture*. It adds nothing exotic — no
+barbell, no cable stack, no machines — because a bench and a box are all the existing ladders
+actually want, and they are the two rungs (`step-20`, `step-45`) that a park cannot supply. Both
+lose the same single pattern, knee flexion, for the same reason: nothing there holds your heels.
+
+The gym preset stays conservative on purpose. A dip station is listed because every gym has one; a
+suspension trainer is not, because plenty do not, and a preset that assumes one would hand you a
+session you cannot do — the failure mode that is worst in practice, since you only find out once
+you are standing there.
+
+**Nothing** is not a place so much as a starting point: one tap to clear the list, then tick the two
+things that are actually in the hotel room. With nothing ticked you still get a session — movement
+prep, split squats, push-ups, calf raises, the things that need no equipment at all — rather than an
+error. Tick a high bar and pull-ups appear. Tick the gym preset's five *plus* straps and the last
+gap closes: straps are the only thing anywhere that holds your heels, so knee flexion has an answer
+again and workout B runs with nothing missing.
+
+A high bar at home is worth spelling out, because it is the case that motivated all this and the
+answer is counter-intuitive: it changes **nothing**. `high-bar` provides only `hang-high`, which the
+rings already provide along with `hang-high-adjustable`. The session is identical either way. The
+gap was never capability, it was expressibility.
+
+Stored as `settings.kit`, a flat array. v3 kept two incompatible answers — a named `place`, plus a
+`customKit` that only the placeless *Anywhere* ever read — so the **v3 → v4 migration** resolves a
+stored place to the kit it stood for. The dangerous case is an *unset* place: it meant home, and
+resolving it to an empty list would silently strip every exercise needing any equipment at all.
+
+### Choosing which exercise trains a pattern
+
+Equipment first, exercise second. Once the room is settled, a card offers the other exercises that
+train its pattern **and are doable here** — `substituteFor` answers *what instead*, `alternativesFor`
+answers *what else*, which is the same search without the exclusion, so the prescribed exercise
+heads its own list and a swap can always be undone.
+
+### The card is a slot, not an exercise
+
+Two things made the app read as exercise-first even after the engine stopped being:
+
+**Names hardcoded equipment the exercise does not require.** With only a high bar ticked, "Ring
+chin-ups" already resolved to its bodyweight rung with the kit chip reading `high bar` — the app was
+doing the right thing and calling it the wrong name. There was no missing "regular chin-up" option,
+because it is the same exercise; a separate one would have split the progression state for no reason.
+So eight exercises lost their equipment: `Ring chin-ups → Chin-ups`, `Ring rows → Inverted rows`,
+`Ring dips → Dips`, and so on. `Push-ups (on bars)` went too — the bars add range at the upper rungs,
+which the ladder already says, and the name claimed a requirement the exercise never had.
+
+### One chip
+
+`.chip` had **no base rule** for a long time and only looked right because `.chip.cap` existed — so
+every chip type added later arrived as an unstyled `<button>` with a font-size bolted on, and each
+invented its own selected colour: green for equipment, translucent accent for the exercise swap,
+another for the gear picker. Three treatments read as three unrelated widgets rather than the same
+question asked about different things.
+
+There is one `.chip` now, matching `.pick-btn` — the A/B picker, the session cap, where you are,
+what equipment is here, which exercise, which piece of kit are all the same control. One selected
+state, shared by every `--on` variant.
+
+The ✓ prefixes went with it. The fill *is* the tick, the controls that predate these never drew one,
+and a glyph that appears on selection changes the button's width — so the row reflowed under your
+thumb as you tapped it.
+
+Two things fell out of doing this on a real screen rather than in the stylesheet. Where a card asks
+`HANG FROM  rings | high bar`, the summary chip below repeated `rings` a line later, so the chips
+are now filtered by the capabilities already asked about. And that filtering immediately produced a
+worse bug: with every requirement suppressed, the empty list fell through to the "no equipment"
+fallback, and a hanging leg raise claimed to need nothing directly under a choice of two things to
+hang from. "Needs nothing" is now read from the rung, not from the filtered list.
+
+The **search links** followed: the query names the movement and the app prepends whatever equipment
+actually resolved, so a park bar searches `high bar pull ups form tutorial` rather than sending you
+to a ring tutorial for an exercise you are not doing.
+
+The same rule reaches the coaching, which is where it actually bites: *"Rings turned out at the top"*
+is wrong advice on a fixed bar, and it sat on a rung the bar can do. A test now enforces both —
+no name may contain an equipment word if any rung is doable without it, and no cue may assume rings
+on a rung that does not need them (`"On rings, …"` is allowed, since it says so). Writing that test
+found four more cases than reading for them did, including split squats telling you to steady
+yourself on rings when a bench provides the same `steady`.
+
+**And the card never said what it was for.** Every pattern now carries a plain-words reading —
+`pull-vertical` → *lats, biceps* — shown under the exercise name. Display only: substitution still
+runs on the pattern, because "lats" would happily swap a pull-up for a row and those are not
+substitutes. The muscles are the reading; the pattern is the rule.
+
+### Choosing between equipment
+
+With rings and a high bar both up, a chin-up can be done on either — that is a *preference*, not a
+constraint, and declaration order was quietly answering "rings" every time. The card now asks, but
+the choice is keyed by **capability**, not by exercise:
+
+> HANG FROM  `rings` `✓ high bar`
+
+One answer to *"what do I hang from?"* covers the chin-up, the pull-up, the dead hang, the scap pull
+and the leg raise at once, because you do not hang from the rings for one and walk to the bar for
+the next. `settings.gear` is `capability → token`, and `capabilities()` takes it as an optional
+third argument. A preference can only ever pick between things that are all present and all
+sufficient: preferring something you have not ticked, or something that cannot do the job, is
+ignored rather than trusted, so a preference can never widen what is possible.
+
+**The question only appears where there is genuinely a choice**, which turns out to be the
+interesting part. A *feet-assisted* chin-up needs `hang-high-adjustable` — a height you choose — and
+a fixed bar cannot give that. So the chin-up card offers nothing at levels 1 and 2 and offers both
+at level 3, where the rung is plain bodyweight and needs only `hang-high`. That is not the feature
+failing; it is the ladder being honest about what a bar can do.
+
+### Choosing between exercises
+
+**What the program already schedules is not a free choice**, even where the pattern matches. Chin-ups
+and pull-ups are both `pull-vertical`, and either beats nothing where a place can only manage one —
+that is `substituteFor`'s job, and it keeps the looser rule deliberately. But a supinated grip pulls
+with the elbow flexors in a way a pronated one does not, which is precisely *why* the week puts one
+in A and the other in B. Offering them against each other would let you chin twice a week and never
+pronate, quietly deleting a movement the week was built around. So `alternativesFor` excludes
+anything the program schedules elsewhere.
+
+**Variety went where the week spends its volume**, because that is where a second exercise is free.
+Splitting a pattern trained once a week means each variant runs fortnightly, which is too slow for a
+target to move; splitting one trained 18 sets a fortnight costs nothing. So the alternatives are:
+
+| pattern | sets / 2 weeks | prescribed | alternative |
+|---|---|---|---|
+| `pull-horizontal` | 18 | Inverted rows | **Archer rows** — unilateral, no extra kit |
+| `push-horizontal` | 15 | Push-ups | **Close-grip push-ups** — triceps and inner chest |
+| `core-anti-extension` | 9 | Fallouts | Front plank |
+| `legs-knee-flexion` | 9 | Leg curls | **Slider leg curls** — a floor and a towel |
+
+A test enforces the rule rather than leaving it as intent: every pattern holding a choice must be
+one the week trains at least nine sets of. `push-dip` deliberately has none — there is no bodyweight
+dip variant that is genuinely different rather than just worse, and the rings-or-parallel-bars
+question is answered by the gear picker instead.
+
+### Two things the volume table decided
+
+Counting sets per pattern over a two-week block, rather than reasoning about the split, made two
+problems obvious that reading the program had not.
+
+**Overhead pressing was trained on one day only** — 9 sets a fortnight against 18 for the dip, and
+`data/program.js` already carried a comment calling vertical pressing "the weakest pattern here". A
+shoulder that never presses overhead is exactly the one the dip bothers. Pike push-ups now appear on
+the pull day too, at two sets: `push-vertical` goes 9 → 15, and it lands on the day that had room —
+A was 49 minutes against B's 58, and is now 53 against 56.
+
+**Knee flexion was the last pattern nothing away from home could train.** Not a code problem: the
+ring curl needs `handles-low`, which only rings and straps provide. The slider leg curl needs a hard
+floor and a towel, which the app does not model as equipment at all — so `needs: []`, and a park, a
+gym and an empty hotel room all reach **14 of 14 patterns**. It is unscheduled, so it shows up as a
+choice against the ring curl rather than replacing it; the ring version loads the hamstring harder
+and stays the default wherever there are handles.
+
+**The choice is sticky, not a rotation**, and that is deliberate. Progression state lives on the
+exercise and the engine moves a target by consecutive hits, so splitting a pattern across variants
+divides its exposure. The frequency table prices it exactly:
+
+| pattern | sessions/week at 3× | can carry a second variant? |
+|---|---|---|
+| prehab ×3, pull-vertical, pull-horizontal, push-dip, push-horizontal | 3 | yes — each still gets ~1.5× |
+| core-hip-flexion, legs-knee, legs-calf, prehab-rear-delt | 2 | marginal |
+| core-anti-extension, legs-knee-flexion, push-vertical, legs-hip | 1 | no — each would run fortnightly |
+
+The program already demonstrates the working version: A does pull-ups, B does chin-ups, each keeps
+its own progression and both advance. It works *because* it is fixed.
+
+So the choice is keyed by **workout and slot** (`A:ring-pullup`), never by pattern — a per-pattern
+key would collapse that A/B split the moment you swapped either one. Choosing what the workout
+already prescribes *clears* the override rather than storing it, so the slot is not frozen against a
+later change to the program. Swapping is locked once a set is logged, the same pin as the level
+stepper and for the same reason: the session records what you did against the exercise you did it
+on. A choice the room cannot honour still falls back to substitution, so the two mechanisms compose.
+
+The choice is stored in `settings.variant`, which surfaced a bug worth recording because the class
+of it recurs: **`load()` copies only the keys `DEFAULT_SETTINGS` declares.** A setting written at
+runtime but never declared is saved to storage and then silently dropped on the way back in — the
+swap worked, and was gone next time the app opened. Its own test checked what had been *written* and
+never re-booted, so it passed throughout. There is now a generic guard: every setting the app writes
+has to be a setting it can read back. Object and array defaults are also cloned on load, or the
+default would *be* the live state and mutating it in place would leave the next load starting from
+the last run's data.
+
+That lock note is also what exposed a **latent bug in the DOM patcher**, which had been correct for
+weeks only because every keyed node existed in both trees. It is the first *conditional* keyed node:
+with no old node to match, it fell through to positional matching and consumed the next unkeyed slot
+on its way past. Everything below shifted by one, so `<div class="sets">` was patched into the kit
+row and every set row underneath was rebuilt — held references went stale and taps did nothing,
+silently. A keyed node with no match is now simply new. Worth noting that the first test written for
+this looked its rows up fresh each time and passed throughout; only holding the references across
+the log catches it.
+
+**Gaps are reported as PATTERNS, not exercises**, and getting that wrong first is instructive. The
+initial version announced *"not possible at park: push-ups, pike push-ups, ring fallouts, ring leg
+curls"* — four losses. Two of them were not losses at all, they were mistakes in my own
+requirements: a push-up needs no bars (they add range, they are not the exercise) and a pike
+push-up is normally done hands-flat on the floor. Requiring them meant a park had no horizontal or
+overhead push whatsoever, which is absurd.
+
+What is actually lost is much smaller — and where something else in the pool can train the same
+pattern, **it is substituted rather than dropped**. The workout names ring fallouts; a park has no
+hanging handles; a front plank needs nothing and trains the same thing, so that is what you get,
+with the card saying so:
+
+> **Front plank**  `for Ring fallouts`
+
+Preference is declaration order, so the exercise you would rather do is simply the one written
+first. The volume the workout asked for carries over. The *level* does not — a plank ladder and a
+fallout ladder are different progressions, and carrying a number between them would be inventing
+one.
+
+That leaves a single genuine hole, which is the only thing worth telling you about:
+
+> Nothing here trains **knee flexion**. Everything else is covered, at whatever level this place
+> supports.
+
+Workout A in a park loses nothing at all — same eleven exercises, same ~49 minutes, different
+equipment throughout.
+
+Your stored level is never touched. The card says where the room has moved you and where you
+really are:
+
+> Down to level 3 here — no chair 45 cm. Your level is 5.
+
+**Requirements are not monotonic along a ladder**, which cost me a wrong first implementation. A
+toes-down hang needs an adjustable height; a *full* hang needs only a bar. So in a park the easy
+rung is the impossible one and the harder rung is the one that works — the search goes down first,
+then up, and the card says which:
+
+> Up to level 2 here — no rings for level 1. Your level is 1.
+
+### Movement patterns, not muscles
+
+Every exercise declares a **movement pattern**, and two exercises share one only when either could
+genuinely stand in for the other:
+
+```
+prehab-warmup   prehab-hang   prehab-scap   prehab-rear-delt
+pull-vertical   pull-horizontal
+push-dip        push-vertical   push-horizontal
+legs-knee       legs-hip        legs-knee-flexion   legs-calf
+core-anti-extension   core-hip-flexion
+```
+
+Muscles would be the wrong unit. "Lats" would let something swap a pull-up for a row, and those
+are not substitutes — you need both, because vertical and horizontal pulling load the scapula
+differently. "Abs" would make a hanging leg raise interchangeable with a ring fallout, and one
+produces hip flexion while the other resists extension. Only `pull-vertical` holds two exercises,
+and that is correct: pull-ups and chin-ups really are the same job with a different grip.
+
+The coarse family — push, pull, legs, core, prehab — is **derived from the prefix**, so adding a
+pattern needs no second place to register it.
+
+### What the week actually trained
+
+The History tab shows the last seven days as sets **per pattern**, against what one A and one B
+would give you, and names anything that got close to nothing.
+
+This exists because of the first real export. Two sessions, 41 sets logged — a perfectly healthy
+number — and every hip-dominant and every overhead set missing, because the three exercises that
+provide them sit at the end of workout B and fell off when the clock ran out. A total cannot show
+that. Split by pattern it is one line:
+
+> Barely trained: **hip-dominant**, **knee flexion**, **overhead push**.
+
 ## The split
 
 Alternating A and B, **2-3 sessions a week, at least a day apart** — no fixed days. Legs are split
@@ -545,8 +860,8 @@ trained on consecutive days:
 
 | | Workout A — pull emphasis | Workout B — push emphasis |
 |---|---|---|
-| Vertical | Ring pull-ups 3×6-8 | Ring chin-ups 3×6-8 |
-| Horizontal pull | Ring rows 3×10-12 | Ring rows 3×10-12 *(one level harder)* |
+| Vertical | Pull-ups 3×6-8 | Chin-ups 3×6-8 |
+| Horizontal pull | Inverted rows 3×10-12 | Inverted rows 3×10-12 *(one level harder)* |
 | Push | Ring dips 3×6-8, push-ups 2×10-12 | Ring dips 3×6-8, push-ups 3×10-12 |
 | Vertical push | — | Pike push-ups 3×6-10 |
 | Core | Hanging leg raises 3×8-10 | Ring fallouts 3×20-30 s |
@@ -564,6 +879,32 @@ whatever you actually complete rather than from what you picked.
 this from your actual prescriptions. Use the **Time today** control to cap it; 40 minutes trims a
 handful of sets off the least important exercises. Push-ups drop to two sets on the pull day — the chest already took three sets of dips — and the
 warm-up runs one set of each. That is where the time for legs came from.
+
+### Am I going to finish?
+
+Mid-session the header answers the question you actually have at minute 35:
+
+```
+Workout B · Push emphasis
+RPE 5-6 · 3-4 reps in reserve · ~58 min
+~29 min left · finishing about 19:42 · running 24% slow
+```
+
+It exists because of a real session. Workout B ran out of time, the last three exercises were
+simply never done — the hip work and the overhead press, which are the two things that day exists
+to provide — and **nothing warned anybody**. The app showed the estimate it made *before* the
+session started, and a clock counting up. Neither answers "am I going to finish".
+
+The remainder is walked off the same timeline everything else uses, and **scaled by the pace you
+are actually working at**: what the model thought the part behind you would take, against what the
+clock says it did. Estimating the rest of a session from a fixed model while running 30% slow is
+how you find out you are out of time by running out of time.
+
+Two guards on that. The pace is only computed once there are a couple of minutes of modelled work
+behind you — two sets in, the ratio is noise — and it is clamped to 0.6-2, because a 4× projection
+off one slow set helps nobody. With a **Time today** cap set, going over turns the line amber:
+
+> Over your 40 min. Cut a set or two now, while there is still something to cut.
 
 ### Session length
 
@@ -747,8 +1088,8 @@ one caveat below.
 |---|---|---|
 | Vertical pull | Pull-ups / chin-ups + vest — **excellent** | Nothing. Dumbbells cannot do this at all. |
 | Vertical push | Ring dips + vest — **excellent** | Nothing comparable. |
-| Horizontal pull | Ring rows, 5 levels + vest — **good** | Smoother loading, single-arm work |
-| Horizontal push | Push-ups on bars, 5 levels + vest — **good** | Floor press, smoother loading |
+| Horizontal pull | Inverted rows, 5 levels + vest — **good** | Smoother loading, single-arm work |
+| Horizontal push | Push-ups, 5 levels + vest — **good** | Floor press, smoother loading |
 | Elbow flexion | Chin-ups — **fine** | Direct, smoother loading |
 | Shoulder rotation range | Dead hang + face pull finish — **partial** | Nothing; a band is the right tool |
 | Hip extension | Hip thrusts to single-leg + vest — **good** | Higher ceiling once the vest runs out |
@@ -794,9 +1135,9 @@ feet with nothing in between, while ring fallouts scale continuously by walking 
 
 ## How it is built
 
-Vanilla JavaScript, no framework, no build step, no dependencies — including in the tests. Open
-`index.html` and it runs; the only tooling is `node` for the test suite and one script that
-regenerates a file list.
+Vanilla JavaScript, no framework, no build step, and no runtime dependencies. Open `index.html` and
+it runs. The fast Node suites also need no packages; Playwright and axe are development-only tools
+for exercising the published app in a real browser.
 
 The shape that has held up through every rewrite: **`data/program.js` holds no logic and
 `progression.js` holds no exercise knowledge.** The level model, the timeline, three storage
@@ -816,6 +1157,7 @@ patch.js                      applies rendered HTML without destroying the DOM
 audio.js                      beeps, speech, and the rules about when they go out
 data/program.js               exercises, ladders, cues, phases, workouts A/B
 data/images.js                GENERATED — which illustrations exist locally
+tokens.css                    local Nordic Utility semantic design tokens
 styles.css                    mobile-first dark theme
 tools/gen-images.mjs          regenerates data/images.js and sw.js MEDIA
 tests/progression.test.mjs    the rules are right — 213 assertions
@@ -826,6 +1168,8 @@ tests/patch.test.mjs          rendering keeps node identity — 30
 tests/dom.mjs                 a DOM small enough to test against, zero deps
 tests/harness.mjs             check/section/report, and the crash guard
 tests/all.mjs                 runs all five
+tests/browser/app.spec.mjs    Chromium flows, offline boot, and axe audits
+playwright.config.mjs         mobile browser-test setup and local server
 ```
 
 ### Testing
@@ -841,7 +1185,8 @@ was not looking at what the action changed. Verified by deleting one `save()` �
 `note: ""` against `note: "left shoulder fine"`.
 
 
-Run them with `node tests/all.mjs`. No install step: every script `index.html` loads is run
+Run the fast suites with `node tests/all.mjs` (or `npm test`). No install step is needed for those:
+every script `index.html` loads is run
 verbatim in a VM context against a minimal document, so there is no second copy of anything to
 drift — the test harness even reads its script list out of `index.html`, so a new file cannot be
 in the page and missing from the tests. A suite that dies part-way says which section it died in
@@ -851,6 +1196,10 @@ The split matters. Every bug that ever reached a browser here was in the wiring,
 a click handler that threw and froze a card, an image that could never load, a quote that closed
 an attribute early. `ui.test.mjs` drives the real app through the real markup and clicks real
 buttons; each of its cases is a bug that actually shipped.
+
+Run `npm install` once and `npm run test:browser` for the real-browser layer. It uses mobile and
+desktop Chromium viewports to verify a persisted workout flow, keyboard tab navigation, an
+installed-shell offline reload, and a zero-violation axe scan of all four tabs.
 
 ### Everything awkward takes its dependency as an argument
 
@@ -966,6 +1315,9 @@ have *earned* — progression is always judged on the level the state is actuall
 - **A generated-files check.** `node tools/gen-images.mjs` is re-run and the result diffed against
   what is committed, so adding an illustration and forgetting to regenerate fails with the command
   to fix it rather than with a picture that silently vanishes offline.
+- **Real mobile and desktop Chromium passes.** Playwright checks a persisted workout, responsive
+  page width, and offline restart, while axe audits Today, History, Program and Data for automated
+  accessibility violations.
 
 [.github/workflows/deploy.yml](.github/workflows/deploy.yml) publishes to GitHub Pages on a
 **published release**, or on demand from the Actions tab — the same trigger, permissions and
@@ -1001,8 +1353,15 @@ Changing the shape of what is stored means bumping `SCHEMA` in `progression.js` 
 step to `migrate()` — which runs before anything reads the data, and tells you on screen what it
 changed rather than moving a number silently. Clearing site data wipes it, so
 export from the **Data** tab now and then — it downloads a JSON file with every session, and
-importing it restores the exact state. Sessions are never overwritten by the app; the only
+importing it restores the exact state. Imports are size- and complexity-bounded, migrated, and
+structurally validated in memory before they replace the local copy; malformed files and exports
+from a newer schema are refused.
+Sessions are never overwritten by the app; the only
 destructive actions are the two explicit reset buttons.
+
+If browser storage is unavailable or full, a persistent warning appears immediately and offers a
+download of the still-live in-memory state. Invalid data already in storage is left untouched and
+offered as recovery data while the app opens a safe fresh state in memory.
 
 An in-progress session survives closing the tab: reopen and it picks up with the logged sets
 still there.

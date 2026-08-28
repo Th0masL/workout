@@ -182,6 +182,11 @@ class Element {
     this.listeners.get(type).push(fn);
   }
   click() { dispatch(this, 'click'); }
+  change() { dispatch(this, 'change'); }
+  load() { dispatch(this, 'load'); }
+  error() { dispatch(this, 'error'); }
+  keydown(key) { return dispatch(this, 'keydown', { key }); }
+  focus() { this.ownerDocument.activeElement = this; }
 }
 
 class Style {
@@ -270,8 +275,11 @@ function match(el, sel) {
 /* Events bubble from the target to the document. app.js hangs one delegated
  * click listener on the document and reads e.target.closest(...) — get this
  * wrong and every button in the app silently does nothing. */
-function dispatch(target, type) {
-  const ev = { type, target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+function dispatch(target, type, extra = {}) {
+  const ev = Object.assign(
+    { type, target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } },
+    extra,
+  );
   /* Walking parentNode reaches the Document by itself when the node is in the
    * tree, because documentElement's parent IS the document. A detached node
    * stops short — which is the point: clicking one does nothing in a browser
@@ -348,6 +356,7 @@ class Document {
     this.parentNode = null;
     this.nodeType = 9;
     this.visibilityState = 'visible';
+    this.activeElement = null;
     this.documentElement = new Element('html', this);
     this.documentElement.parentNode = this;
     this.childNodes.push(this.documentElement);
@@ -374,7 +383,14 @@ class Document {
 class Storage {
   constructor() { this.map = new Map(); }
   getItem(k) { return this.map.has(k) ? this.map.get(k) : null; }
-  setItem(k, v) { this.map.set(k, String(v)); }
+  setItem(k, v) {
+    if (this.failWrites) {
+      const err = new Error('storage full');
+      err.name = 'QuotaExceededError';
+      throw err;
+    }
+    this.map.set(k, String(v));
+  }
   removeItem(k) { this.map.delete(k); }
   clear() { this.map.clear(); }
 }
@@ -402,6 +418,12 @@ export function makeWindow({ protocol = 'http:', startTime = Date.parse('2026-03
       reload() { this.reloads++; },
     },
     navigator: { userAgent: 'test' },
+    FileReader: class {
+      readAsText(file) {
+        this.result = file.text;
+        if (this.onload) this.onload();
+      }
+    },
     isSecureContext: protocol !== 'http:',
     listeners: new Map(),
     scrollTo() {},

@@ -122,14 +122,21 @@
     for (i = 0; i < news.length; i++) {
       var n = news[i];
       var at = -1;
+      var keyed = false;
       if (n.nodeType === 1) {
         var nk = keyOf(n);
         if (nk) {
+          keyed = true;
           var slot = byKey[n.tagName + "\u0000" + nk];
           if (slot !== undefined && !taken[slot]) at = slot;
         }
       }
-      if (at < 0) {
+      /* A KEYED node with no match is genuinely new, and must not consume a
+       * positional slot on its way past: doing so silently shifted every
+       * unkeyed sibling below it by one, so a card that grew a keyed note
+       * patched its <div class="sets"> into the kit row and rebuilt every set
+       * row underneath — detaching the buttons a tap handler was holding. */
+      if (at < 0 && !keyed) {
         /* Skip anything already claimed, and anything KEYED — a keyed node is
          * reserved for its own key and must not be consumed positionally. */
         while (cursor < olds.length) {

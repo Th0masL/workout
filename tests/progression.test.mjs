@@ -58,28 +58,42 @@ check('every exercise has cues and a rationale',
 // there, and a caution with no stripe would go unnoticed.
 check('the warn stripe and the caution text always travel together',
   Object.entries(P.exercises).filter(([, e]) => !!e.warn !== !!e.caution).map(([k]) => k), []);
-// Equipment chips are only useful if they cannot drift from reality.
-const KIT_TOKENS = ['rings', 'bars', 'sofa', 'chair'];
-check('every exercise declares a kit',
-  Object.entries(P.exercises).filter(([, e]) => !Array.isArray(e.kit)).map(([k]) => k), []);
-check('every kit token is one the UI can label',
+// An exercise needs a CAPABILITY, not an object. "rings" was the wrong unit: a
+// dead hang needs something overhead to hang from and a park bar does fine,
+// while a feet-assisted pull-up needs that something to be at a height you
+// choose — which only the rings give.
+const CAPS = [...new Set(Object.values(P.equipment).flatMap(e => e.provides))];
+check('every exercise declares what it needs',
+  Object.entries(P.exercises).filter(([, e]) => !Array.isArray(e.needs)).map(([k]) => k), []);
+check('every level declares what it needs',
   Object.entries(P.exercises).flatMap(([id, e]) =>
-    [...(e.kit || []), ...(e.ladder || []).flatMap(l => l.kit || [])]
-      .filter(t => !KIT_TOKENS.includes(t)).map(t => id + ':' + t)), []);
-// A level that puts you in the rings must not still claim you need the bars.
-check('the push-up ladder hands off from bars to rings',
-  P.exercises.pushup.ladder.map(l => (l.kit || P.exercises.pushup.kit).join('+')),
-  ['bars', 'bars', 'bars+sofa', 'bars+chair', 'rings']);
-// Anything at a rings station needs the rings, unless the level says otherwise.
-check('ring-station exercises list the rings at their base level',
-  Object.entries(P.exercises)
-    .filter(([, e]) => e.station.indexOf('rings') === 0)
-    .filter(([, e]) => !((e.ladder[0] && e.ladder[0].kit) || e.kit).includes('rings'))
-    .map(([k]) => k),
-  // Two deliberate exceptions, both of which sit at a rings station without
-  // needing the rings: movement prep is grouped there so the whole warm-up is
-  // one block, and the split squat's first level is a plain bodyweight squat.
-  ['movement-prep', 'split-squat']);
+    e.ladder.map((_, i) => [id, i]).filter(([, i]) => !Array.isArray(PR.rung(e, i).needs))
+      .map(([k, i]) => k + ':L' + (i + 1))), []);
+check('and every capability is one some equipment provides',
+  Object.entries(P.exercises).flatMap(([id, e]) =>
+    e.ladder.flatMap((_, i) => PR.rung(e, i).needs)
+      .filter(c => !CAPS.includes(c)).map(c => id + ':' + c)), []);
+check('no requirement names a piece of equipment by name',
+  Object.entries(P.exercises).flatMap(([id, e]) =>
+    e.ladder.flatMap((_, i) => PR.rung(e, i).needs)
+      .filter(c => P.equipment[c]).map(c => id + ':' + c)), []);
+// The push-up bars add RANGE; they are not a requirement. Requiring them meant
+// a park had no horizontal push at all, which is absurd — the body position is
+// the load, and raised hands just let the chest travel further.
+check('a push-up needs nothing until the furniture rungs',
+  P.exercises.pushup.ladder.map((_, i) => PR.rung(P.exercises.pushup, i).needs.join('+')),
+  ['', '', 'step-20', 'step-45', 'handles-low']);
+check('and a pike push-up only needs the bars for the deficit rung',
+  P.exercises['pike-pushup'].ladder.map((_, i) => PR.rung(P.exercises['pike-pushup'], i).needs.join('+')),
+  ['', 'step-20', 'step-45', 'handles-floor+step-45']);
+// A capability nothing in a place provides is a real gap; an exercise you
+// cannot do there usually is not, because something else trains the same thing.
+check('the requirement is on the level that genuinely needs it',
+  PR.rung(P.exercises['pike-pushup'], 0).needs, []);
+// Feet-assisted rungs need a height you can CHOOSE; bodyweight ones do not.
+check('assisted pull-up rungs need an adjustable bar, bodyweight ones do not',
+  P.exercises['ring-pullup'].ladder.map((_, i) => PR.rung(P.exercises['ring-pullup'], i).needs[0]),
+  ['hang-high-adjustable', 'hang-high-adjustable', 'hang-high']);
 check('every exercise has a demo search term',
   Object.entries(P.exercises).filter(([, e]) => !e.search).map(([k]) => k), []);
 // The search must use the name the movement is commonly known by, not ours —
@@ -172,10 +186,16 @@ check('and stops mentioning it once open',
 // extension-plus-internal-rotation.
 check('and says so, on the level you meet first',
   /at your SIDES/.test(PR.rung(P.exercises['ring-dip'], 0).cues.join(' ')), true);
-// The progression is raising the heels, so each step names its platform.
+// The progression is raising the heels, so each step asks for a taller one.
 check('the assist steps up through the two chairs',
-  P.exercises['ring-dip'].ladder.slice(0, 3).map(l => (l.kit || []).join('+')),
-  ['', 'rings+sofa', 'rings+chair']);
+  P.exercises['ring-dip'].ladder.slice(0, 3)
+    .map((_, i) => PR.rung(P.exercises['ring-dip'], i).needs.join('+')),
+  ['dip-support-adjustable', 'dip-support-adjustable+step-20',
+   'dip-support-adjustable+step-45']);
+// And the bodyweight rungs drop the adjustable requirement, which is what makes
+// them possible on a fixed pair of parallel bars in a park.
+check('bodyweight dips only need a pair of supports',
+  [3, 4].map(i => PR.rung(P.exercises['ring-dip'], i).needs), [['dip-support'], ['dip-support']]);
 // Nothing but the leg curl needs the rings at their very lowest.
 check('only the leg curl uses the low station',
   Object.entries(P.exercises).filter(([, e]) => e.station === 'rings-low').map(([k]) => k),
@@ -193,6 +213,7 @@ section('Installable app shell');
 const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
 const html = readFileSync(join(root, 'index.html'), 'utf8');
 const sw = readFileSync(join(root, 'sw.js'), 'utf8');
+const tokens = readFileSync(join(root, 'tokens.css'), 'utf8');
 
 check('manifest launches standalone', manifest.display, 'standalone');
 check('manifest declares a maskable icon',
@@ -201,6 +222,17 @@ check('every manifest icon file exists',
   manifest.icons.filter(i => !existsSync(join(root, i.src))).map(i => i.src), []);
 check('index links the manifest and an apple-touch-icon',
   [/rel="manifest"/.test(html), /rel="apple-touch-icon"/.test(html)], [true, true]);
+check('Nordic Utility tokens load before component styles',
+  html.indexOf('href="tokens.css"') < html.indexOf('href="styles.css"'), true);
+check('the existing dark-only theme policy is explicit', /<html[^>]+data-theme="dark"/.test(html), true);
+check('the local token copy includes the canonical semantic roles',
+  ['--color-bg', '--color-primary', '--color-success', '--color-warning', '--color-danger',
+   '--radius-md', '--shadow-md', '--font-sans'].filter(role => !tokens.includes(role)), []);
+check('the page ships a restrictive content security policy',
+  /Content-Security-Policy/.test(html) && /object-src 'none'/.test(html), true);
+check('the app has no inline event or style attributes',
+  /\son(?:load|error)=/.test(html + readFileSync(join(root, 'app.js'), 'utf8')) ||
+    /<[^>]+\sstyle=/.test(html + readFileSync(join(root, 'app.js'), 'utf8')), false);
 check('the apple-touch-icon file exists', existsSync(join(root, 'icons/icon-180.png')), true);
 
 // Both generated lists are checked against disk. A manifest nobody regenerates
@@ -231,6 +263,17 @@ check('every hotlinked illustration is precached',
 // identical to a missing file. Only a navigation may fall back to the shell.
 check('the shell fallback is limited to navigations',
   /req\.mode === "navigate"/.test(sw) && /status: 504/.test(sw), true);
+check('the required shell installs atomically', /return c\.addAll\(SHELL\)/.test(sw), true);
+check('old cache cleanup is limited to this app namespace',
+  /k\.indexOf\(CACHE_PREFIX\) === 0 \? caches\.delete\(k\)/.test(sw), true);
+check('network revalidation preserves the original request',
+  /new Request\(req, \{ cache: "no-cache" \}\)/.test(sw), true);
+check('a weak connection falls back after a bounded wait',
+  /Promise\.race\(\[network, deadline\]\)/.test(sw) && /2500/.test(sw), true);
+check('media warming is tied to a service-worker lifetime',
+  /type !== "CACHE_MEDIA"/.test(sw) && /e\.waitUntil\(\s*warmMedia\(\)/.test(sw), true);
+check('media cache completion is reported back to the page',
+  /type: "MEDIA_CACHE_STATUS"/.test(sw) && /e\.source\.postMessage/.test(sw), true);
 
 // Every shell entry the worker precaches must actually be there, or the app
 // silently loses offline support for that file.
@@ -447,6 +490,67 @@ check('a budget that already fits changes nothing',
   PR.fit(pool, 99999, TOPTS).trimmed, []);
 
 // Every exercise must carry the config the trimmer needs.
+// Every place has to be describable, and every piece of kit has to do something.
+check('every place lists real equipment',
+  Object.entries(P.places).flatMap(([id, p]) =>
+    p.has.filter(t => !P.equipment[t]).map(t => id + ':' + t)), []);
+check('and every piece of equipment provides something',
+  Object.entries(P.equipment).filter(([, e]) => !e.provides.length).map(([k]) => k), []);
+check('home can do the whole program',
+  Object.entries(P.exercises).filter(([, e]) =>
+    PR.usableLevel(e, PR.maxLevel(e), PR.capabilities(P.places.home, P.equipment)) < 0)
+    .map(([k]) => k), []);
+// A place without the furniture caps you down rather than dropping you.
+const parkCaps = PR.capabilities(P.places.park, P.equipment);
+check('a park caps the push-ups it cannot fully equip',
+  PR.usableLevel(P.exercises['ring-row'], 4, parkCaps), 2);
+check('and leaves out only what it truly cannot do',
+  Object.entries(P.exercises).filter(([, e]) => PR.usableLevel(e, PR.maxLevel(e), parkCaps) < 0)
+    .map(([k]) => k),
+  ['ring-fallout', 'ring-leg-curl']);
+
+// The unit that matters is the PATTERN, not the exercise. Losing push-ups for
+// want of bars is not a loss; losing anti-extension because everything that
+// trains it needs rings is.
+check('home has no gaps',
+  PR.gapsAt(P.workouts.A.order.concat(P.workouts.B.order), P.exercises,
+    PR.capabilities(P.places.home, P.equipment)), []);
+// Anti-extension went first, when the plank was added; knee flexion was the
+// last hole and the slider curl closed it. A park now trains everything the
+// week asks for, which is the whole point of the exercise being a capability
+// question rather than an equipment one.
+check('a park is short of nothing at all',
+  PR.gapsAt(P.workouts.A.order.concat(P.workouts.B.order), P.exercises, parkCaps), []);
+check('and a room with no equipment whatsoever now reaches eight of fifteen patterns',
+  [...new Set(Object.values(P.exercises).map((e) => e.pattern))]
+    .filter((p) => Object.values(P.exercises).some((e) => e.pattern === p &&
+      PR.usableLevel(e, PR.maxLevel(e), {}) >= 0)).length, 8);
+// The plank is in no workout's order; it is only ever reached by substitution.
+check('the plank is a substitute, not a scheduled exercise',
+  Object.values(P.workouts).flatMap(w => w.order).filter(o => o.id === 'plank'), []);
+check('and it is what a park reaches for when the fallout will not work',
+  PR.substituteFor(P.exercises['ring-fallout'], P.exercises, parkCaps), 'plank');
+check('at home there is nothing to substitute, because the fallout works',
+  PR.usableLevel(P.exercises['ring-fallout'], 3, PR.capabilities(P.places.home, P.equipment)) >= 0,
+  true);
+check('the ring curl now has a park-legal stand-in of its own',
+  PR.substituteFor(P.exercises['ring-leg-curl'], P.exercises, parkCaps), 'slider-leg-curl');
+check('a pattern with genuinely one exercise still has none to offer',
+  PR.substituteFor(P.exercises['calf-raise'], P.exercises, parkCaps), null);
+check('and the plank itself needs nothing, anywhere',
+  P.exercises.plank.ladder.flatMap((_, i) => PR.rung(P.exercises.plank, i).needs), []);
+check('and workout A, which has neither of them, is short of none',
+  PR.gapsAt(P.workouts.A.order, P.exercises, parkCaps), []);
+// A pattern covered by ANY of its exercises is covered.
+check('one usable exercise is enough to cover a pattern',
+  PR.gapsAt([{ id: 'ring-pullup' }, { id: 'ring-chinup' }], P.exercises, parkCaps), []);
+check('the warm-up is never reported as a gap',
+  PR.gapsAt([{ id: 'movement-prep' }], P.exercises, { }), []);
+check('the chips name the thing in front of you, not the capability',
+  PR.kitFor(['hang-high'], parkCaps, P.equipment), ['high bar']);
+check('and the same requirement names a different object at home',
+  PR.kitFor(['hang-high'], PR.capabilities(P.places.home, P.equipment), P.equipment), ['rings']);
+
 check('every exercise declares a trim priority and a floor',
   Object.entries(P.exercises).filter(([, e]) =>
     typeof e.trimPriority !== 'number' || typeof e.minSets !== 'number').map(([k]) => k), []);
@@ -562,7 +666,7 @@ check('an exercise with no override falls back to its own set count',
 section('Legs');
 
 const legDays = Object.fromEntries(Object.entries(P.workouts).map(([k, w]) =>
-  [k, w.order.filter(o => P.exercises[o.id].pattern === 'legs').map(o => o.id)]));
+  [k, w.order.filter(o => PR.groupOf(P.exercises[o.id].pattern) === 'legs').map(o => o.id)]));
 check('day A is knee-dominant', legDays.A, ['split-squat', 'calf-raise']);
 check('day B is hip-dominant', legDays.B, ['ring-leg-curl', 'hip-thrust']);
 check('the leg curl is done off the floor, no furniture',
@@ -572,13 +676,53 @@ check('both days train legs', Object.values(legDays).every(l => l.length === 2),
 // movement must separate them from the ring rows that follow.
 const aIds = P.workouts.A.order.map(o => o.id);
 check('a non-grip movement buffers the grip work on day A',
-  P.exercises[aIds[aIds.indexOf('hanging-leg-raise') + 1]].pattern, 'legs');
+  PR.groupOf(P.exercises[aIds[aIds.indexOf('hanging-leg-raise') + 1]].pattern), 'legs');
 
 // Every movement pattern a program can leave out. Vertical push was the gap.
-const patterns = Object.fromEntries(['A', 'B'].map(k => [k,
-  new Set(P.workouts[k].order.map(o => P.exercises[o.id].pattern))]));
-check('both days cover push, pull, legs and prehab',
-  ['A', 'B'].filter(k => !['push', 'pull', 'legs'].every(p => patterns[k].has(p))), []);
+const groups = Object.fromEntries(['A', 'B'].map(k => [k,
+  new Set(P.workouts[k].order.map(o => PR.groupOf(P.exercises[o.id].pattern)))]));
+check('both days cover push, pull and legs',
+  ['A', 'B'].filter(k => !['push', 'pull', 'legs'].every(p => groups[k].has(p))), []);
+
+// Patterns are what one exercise could stand in for another ON. Two things
+// share one only when they are genuinely interchangeable — which is the whole
+// reason "pull" had to split: a pull-up and a row are both lats and are not
+// substitutes.
+const byPattern = {};
+for (const [id, e] of Object.entries(P.exercises)) (byPattern[e.pattern] ||= []).push(id);
+check('every exercise declares a movement pattern, not a muscle',
+  Object.entries(P.exercises).filter(([, e]) => !/^(prehab|pull|push|legs|core)-/.test(e.pattern))
+    .map(([k]) => k), []);
+// Sharing a pattern is what MAKES substitution possible — but only where the
+// exercises really are alternatives for one another.
+check('patterns are shared only where the exercises are genuine alternatives',
+  Object.entries(byPattern).filter(([, v]) => v.length > 1),
+  [['pull-vertical', ['ring-pullup', 'ring-chinup']],
+   ['pull-horizontal', ['ring-row', 'archer-row']],
+   ['core-anti-extension', ['ring-fallout', 'plank']],
+   ['push-horizontal', ['pushup', 'diamond-pushup']],
+   ['legs-knee-flexion', ['slider-leg-curl', 'ring-leg-curl']]]);
+// Variety was added where the WEEK spends its volume, because that is where a
+// second exercise costs nothing: split a pattern trained once a week and each
+// variant runs fortnightly, which is too slow for a target to move.
+const setsPerPattern = {};
+for (const k of Object.keys(P.workouts))
+  for (const o of P.workouts[k].order) {
+    const ex = P.exercises[o.id];
+    setsPerPattern[ex.pattern] = (setsPerPattern[ex.pattern] || 0) + (o.setCount || ex.sets) * 3;
+  }
+check('every pattern with a choice is one the week trains at least nine sets of',
+  Object.entries(byPattern).filter(([p, v]) => v.length > 1 && (setsPerPattern[p] || 0) < 9)
+    .map(([p]) => p), []);
+check('the coarse group falls out of the prefix',
+  [...new Set(Object.values(P.exercises).map(e => PR.groupOf(e.pattern)))].sort(),
+  ['core', 'legs', 'prehab', 'pull', 'push']);
+// Vertical and horizontal pulling are separate slots, and so are the two core
+// jobs. Collapsing either would let a resolver drop one of them.
+check('vertical and horizontal pull are different patterns',
+  P.exercises['ring-pullup'].pattern === P.exercises['ring-row'].pattern, false);
+check('and producing hip flexion is not the same as resisting extension',
+  P.exercises['hanging-leg-raise'].pattern === P.exercises['ring-fallout'].pattern, false);
 check('a vertical press exists', !!P.exercises['pike-pushup'], true);
 // The band is gone — nothing may quietly reintroduce a dependency on it.
 check('no exercise depends on a resistance band',
@@ -588,7 +732,7 @@ check('no exercise depends on a resistance band',
 check('both days open with the warm-up',
   ['A', 'B'].filter(k => P.workouts[k].order[0].id !== 'movement-prep'), []);
 check('and follow it with shoulder prep before any hard pull',
-  ['A', 'B'].filter(k => P.exercises[P.workouts[k].order[1].id].pattern !== 'prehab'), []);
+  ['A', 'B'].filter(k => PR.groupOf(P.exercises[P.workouts[k].order[1].id].pattern) !== 'prehab'), []);
 
 // A warm-up must not creep longer every time you complete it.
 const prep = P.exercises['movement-prep'];
@@ -656,8 +800,8 @@ const squat = P.exercises['split-squat'];
 check('a rung inherits what it does not override',
   [PR.rung(squat, 0).rest, PR.rung(squat, 0).step, PR.rung(squat, 0).metric],
   [squat.rest, squat.step, squat.metric]);
-check('a rung that names its own kit REPLACES the exercise default',
-  [PR.rung(squat, 0).kit, PR.rung(squat, 3).kit], [[], ['rings', 'chair']]);
+check('a rung that names its own requirements REPLACES the exercise default',
+  [PR.rung(squat, 0).needs, PR.rung(squat, 3).needs], [[], ['steady', 'step-45']]);
 check('per-side is a property of the level, not the exercise',
   squat.ladder.map((_, i) => PR.rung(squat, i).perSide), [false, true, true, true, true]);
 check('no exercise still uses the old exercise-wide perSideFrom',
@@ -773,6 +917,56 @@ check('it looks forward before wrapping back',
 check('and does wrap when there is nothing ahead',
   PR.nextUp(tl, { id: 'c', set: 1 }, id => id !== 'a').id, 'a');
 
+
+// ---------------------------------------------------------------- //
+section('Am I going to finish?');
+
+// A real session ran out of time and the last three exercises were simply not
+// done — the hip work and the overhead press, the two things that day exists
+// to provide. Nothing warned anybody, because the app only ever showed the
+// estimate it made BEFORE the session and a clock counting up. Neither answers
+// the question you actually have at minute 35.
+const pace = (its, isDone, elapsed) => PR.project(PR.timeline(its, TOPTS), isDone, elapsed);
+const three = [item('a', 3, 30, 90), item('b', 3, 30, 90), item('c', 3, 30, 90)];
+
+const fresh = pace(three, () => false, 0);
+check('nothing done yet means it is all still ahead', fresh.behind, 0);
+check('and the whole session is the remainder', fresh.ahead, PR.estimate(three, TOPTS));
+check('with no pace to speak of yet', fresh.pace, 1);
+
+// The line is drawn after the last set you actually DID — the transition and
+// the rest between it and the next exercise are still ahead of you.
+const doneA = PR.split(PR.timeline(three, TOPTS), (id) => id === 'a');
+check('nothing before the first set counts as time spent',
+  PR.split(PR.timeline(three, TOPTS), () => false).behind, 0);
+check('and the two halves always add up to the whole',
+  doneA.behind + doneA.ahead, PR.estimate(three, TOPTS));
+
+// Working exactly to the model: elapsed equals what the model said that took.
+const onModel = pace(three, (id) => id === 'a', doneA.behind);
+check('on model, the pace reads as 1', onModel.pace, 1);
+check('and the projection is just what is left', onModel.remaining, onModel.ahead);
+
+// Running slow: the remainder has to stretch, or the warning comes too late.
+const slow = pace(three, (id) => id === 'a', 900);
+check('running slow is detected', slow.pace > 1.2, true);
+check('and the remainder stretches with it', slow.remaining > slow.ahead, true);
+check('so the projected total includes the time already spent',
+  slow.total, 900 + slow.remaining);
+
+// Two sets in, the ratio is noise. A 4x projection off one slow set helps nobody.
+check('the pace is clamped at the top', pace(three, (id) => id === 'a', 100000).pace, 2);
+check('and at the bottom', pace(three, (id) => id === 'a', 1).pace, 0.6);
+check('and is not guessed at all before there is enough behind you',
+  pace([item('a', 1, 20, 30)], () => true, 600).pace, 1);
+
+check('everything logged is reported as done', pace(three, () => true, 1000).done, true);
+check('with nothing left', pace(three, () => true, 1000).ahead, 0);
+// A skipped set counts as nothing left to do, exactly like a logged one.
+check('cut sets are not waiting for you',
+  pace(three, (id, set) => id !== 'c' || set === 0, 1000).ahead <
+  pace(three, (id) => id !== 'c', 1000).ahead, true);
+
 // ---------------------------------------------------------------- //
 section('Illustrations resolve in one place');
 
@@ -811,6 +1005,82 @@ check('no candidate contains a quote that would break the fallback chain',
   Object.keys(P.exercises).flatMap(id => [0, 1, 2, 3, 4]
     .flatMap(l => PR.imageCandidates(id, P.exercises[id], l))).filter(u => /['"\\]/.test(u)), []);
 
+
+// ---------------------------------------------------------------- //
+section('What a week actually trained');
+
+// From the real export: two sessions, 41 sets — a respectable-looking number —
+// with every hip-dominant and every overhead set missing, because the exercises
+// that provide them sit at the end of workout B and fell off when time ran out.
+// A total cannot show that. Split by pattern it is obvious.
+const cov = (sessions, since) => PR.coverage({
+  sessions, exercises: P.exercises, since,
+  workouts: [P.workouts.A.order, P.workouts.B.order],
+});
+const sess = (workout, ids, date = '2026-08-02', setsEach = null) => ({
+  date, workout,
+  entries: Object.fromEntries(ids.map(id =>
+    [id, { level: 0, sets: Array.from({ length: setsEach ?? P.exercises[id].sets },
+      () => ({ value: 1, load: 0 })) }])),
+});
+
+check('no sessions means nothing got trained',
+  cov([]).every(r => r.got === 0), true);
+check('and every pattern is still listed, so a gap is visible from day one',
+  cov([]).length, new Set(Object.values(P.exercises)
+    .filter(e => e.progression !== 'fixed').map(e => e.pattern)).size);
+check('the warm-up is left out — it never progresses and is not volume',
+  cov([]).filter(r => r.pattern === 'prehab-warmup'), []);
+
+const full = cov([sess('A', P.workouts.A.order.map(o => o.id)),
+                  sess('B', P.workouts.B.order.map(o => o.id))]);
+check('doing both days in full meets everything',
+  full.filter(r => r.state !== 'met').map(r => r.pattern), []);
+
+// The actual shape of what happened: workout B lost its last three exercises.
+const real = cov([
+  sess('A', P.workouts.A.order.map(o => o.id)),
+  sess('B', P.workouts.B.order.map(o => o.id)
+    .filter(id => !['ring-leg-curl', 'pike-pushup', 'hip-thrust'].includes(id))),
+]);
+check('losing the tail of workout B shows up as three empty patterns',
+  real.filter(r => r.state === 'missed').map(r => r.pattern),
+  ['legs-hip', 'legs-knee-flexion', 'push-vertical']);
+check('while the total set count looks perfectly healthy',
+  real.reduce((n, r) => n + r.got, 0) > 35, true);
+
+// Three states, because "did a bit less" and "did none" are different problems.
+// Split squats are day A only, so one session is the whole week's plan.
+const partial = cov([sess('A', ['split-squat'], '2026-08-02', 2)]);
+check('two thirds of the plan reads as short',
+  partial.find(r => r.pattern === 'legs-knee').state, 'short');
+check('a third of it reads as missed',
+  cov([sess('A', ['split-squat'], '2026-08-02', 1)]).find(r => r.pattern === 'legs-knee').state,
+  'missed');
+check('and all of it reads as met',
+  cov([sess('A', ['split-squat'])]).find(r => r.pattern === 'legs-knee').state, 'met');
+check('doing MORE than planned still reads as met',
+  cov([sess('A', ['split-squat'], '2026-08-02', 9)]).find(r => r.pattern === 'legs-knee').state,
+  'met');
+check('nothing at all is missed',
+  partial.find(r => r.pattern === 'legs-hip').state, 'missed');
+check('rows carry the group, so they can be shown in families',
+  partial.find(r => r.pattern === 'legs-hip').group, 'legs');
+// A pattern with no label would render its own id at the user, which is the
+// kind of thing that ships because nobody has that exercise yet.
+const labelled = readFileSync(join(root, 'app.js'), 'utf8');
+check('every pattern in the program has a human label',
+  [...new Set(Object.values(P.exercises).map(e => e.pattern))]
+    .filter(p => !labelled.includes(`"${p}":`)), []);
+
+// Only the window asked for.
+check('sessions before the window are ignored',
+  cov([sess('A', ['ring-pullup'], '2026-07-01')], '2026-08-01')
+    .find(r => r.pattern === 'pull-vertical').got, 0);
+check('and sessions inside it are counted',
+  cov([sess('A', ['ring-pullup'], '2026-08-03')], '2026-08-01')
+    .find(r => r.pattern === 'pull-vertical').got, P.exercises['ring-pullup'].sets);
+
 // ---------------------------------------------------------------- //
 section('Stored schema migrates');
 
@@ -831,8 +1101,194 @@ check('re-running it is a no-op',
 check('an exercise that no longer exists is skipped, not thrown on',
   PR.migrate({ version: 1, exerciseState: { 'deleted-exercise': { level: 0, target: 1 } } }, P).notes, []);
 
+// v3 said where you were in two incompatible ways: a named place, plus a
+// hand-ticked list that only the placeless "anywhere" ever read. There is one
+// list now, so the stored place has to resolve to the kit it stood for.
+const v4 = (settings) => PR.migrate({ version: 3, settings }, P).state.settings;
+check('a named place becomes the equipment it stood for',
+  v4({ place: 'park' }).kit, P.places.park.has);
+check('and the place itself is gone', v4({ place: 'park' }).place, undefined);
+check('the hand-ticked list wins where it was the one being used',
+  v4({ place: 'anywhere', customKit: ['high-bar', 'bench'] }).kit, ['high-bar', 'bench']);
+check('and it is gone too', v4({ place: 'anywhere', customKit: ['bench'] }).customKit, undefined);
+// The dangerous case: an unset place meant home, and resolving it to an empty
+// list would silently strip every exercise that needs any equipment at all.
+check('an unset place still means home', v4({}).kit, P.places.home.has);
+check('and so does a place that no longer exists', v4({ place: 'gone' }).kit, P.places.home.has);
+check('a list already ticked is left alone',
+  v4({ place: 'home', kit: ['straps'] }).kit, ['straps']);
+check('the whole thing is idempotent',
+  PR.migrate(PR.migrate({ version: 3, settings: { place: 'park' } }, P).state, P).state.settings.kit,
+  P.places.park.has);
+
+// ---------------------------------------------------------------- //
+section('Which of the things you have');
+
+// Declaration order decided this, which meant it silently answered "rings" for
+// everything: with rings and a high bar both up, a chin-up can be done on
+// either, and that is a preference rather than a constraint.
+const both = { has: ['rings', 'high-bar', 'low-bar'] };
+check('with nothing preferred, declaration order still wins',
+  PR.capabilities(both, P.equipment)['hang-high'], 'rings');
+check('a preference is honoured',
+  PR.capabilities(both, P.equipment, { 'hang-high': 'high-bar' })['hang-high'], 'high-bar');
+check('and leaves the other capabilities alone',
+  PR.capabilities(both, P.equipment, { 'hang-high': 'high-bar' })['grip-chest'], 'rings');
+
+// Preferences must never widen what is possible, only pick between equals.
+check('preferring something that is not here is ignored',
+  PR.capabilities(both, P.equipment, { 'hang-high': 'straps' })['hang-high'], 'rings');
+check('preferring something that cannot do the job is ignored',
+  PR.capabilities(both, P.equipment, { 'hang-high': 'low-bar' })['hang-high'], 'rings');
+check('and a preference cannot conjure a capability nothing here provides',
+  PR.capabilities({ has: ['high-bar'] }, P.equipment, { 'handles-low': 'high-bar' })['handles-low'],
+  undefined);
+
+// The question is only worth asking where more than one thing could answer it.
+check('two things can hang you', PR.providersFor('hang-high', both, P.equipment),
+  ['rings', 'high-bar']);
+check('one thing grips at chest here', PR.providersFor('grip-chest',
+  { has: ['low-bar'] }, P.equipment), ['low-bar']);
+check('and nothing at all is an empty list, not a crash',
+  PR.providersFor('handles-low', { has: ['high-bar'] }, P.equipment), []);
+check('a full kit offers three ways to hang',
+  PR.providersFor('hang-high', { has: Object.keys(P.equipment) }, P.equipment),
+  ['rings', 'high-bar', 'straps']);
+
+// Every capability that can ever be a question needs wording for it.
+const askable = [...new Set(Object.values(P.equipment).flatMap((e) => e.provides))];
+check('every capability has a label for asking about it',
+  askable.filter((c) => !P.capLabels[c]), []);
+check('and none is labelled that no equipment provides',
+  Object.keys(P.capLabels).filter((c) => !askable.includes(c)), []);
+
+// ---------------------------------------------------------------- //
+section('What else could train this');
+
+// substituteFor answers "what INSTEAD" and excludes the exercise itself;
+// alternativesFor answers "what ELSE", which has to include it — the list is a
+// choice, and a choice you cannot choose back out of is a one-way door.
+const home = PR.capabilities(P.places.home, P.equipment);
+check('the prescribed exercise heads its own list',
+  PR.alternativesFor(P.exercises['ring-fallout'], P.exercises, home)[0], 'ring-fallout');
+check('with the other exercise for that pattern behind it',
+  PR.alternativesFor(P.exercises['ring-fallout'], P.exercises, home), ['ring-fallout', 'plank']);
+check('and it is symmetric, so a swap can be undone',
+  PR.alternativesFor(P.exercises['plank'], P.exercises, home), ['plank', 'ring-fallout']);
+check('a pattern with one exercise offers no choice',
+  PR.alternativesFor(P.exercises['calf-raise'], P.exercises, home).length, 1);
+
+// What the program already schedules is not a free choice, even where the
+// pattern matches. Chin-ups and pull-ups are both vertical pulls and either
+// beats nothing where a place can only manage one — that is substituteFor's
+// job. But a supinated grip pulls with the elbow flexors in a way a pronated
+// one does not, which is why the week schedules both; offering them against
+// each other would let you chin twice a week and never pronate.
+const scheduled = {};
+for (const k of Object.keys(P.workouts))
+  for (const o of P.workouts[k].order) scheduled[o.id] = true;
+const free = (id) => PR.alternativesFor(P.exercises[id], P.exercises, home,
+  Object.fromEntries(Object.keys(scheduled).filter((x) => x !== id).map((x) => [x, true])));
+check('a scheduled sibling is not a free choice', free('ring-pullup'), ['ring-pullup']);
+check('nor the other way round', free('ring-chinup'), ['ring-chinup']);
+check('an unscheduled one still is', free('ring-fallout'), ['ring-fallout', 'plank']);
+check('and the slot itself is never excluded from its own list',
+  Object.keys(P.exercises).every((id) => free(id)[0] === id), true);
+// Substitution is the last resort and keeps the looser rule, deliberately: a
+// place that can only manage one of them should get one, not neither.
+check('substitution still crosses where a choice would not',
+  PR.substituteFor(P.exercises['ring-pullup'], P.exercises, home), 'ring-chinup');
+
+// Only what is doable HERE. A park has no hanging handles, so the fallout is
+// not on offer even though it is what the workout prescribes.
+const park = PR.capabilities(P.places.park, P.equipment);
+check('a park offers the plank and not the fallout',
+  PR.alternativesFor(P.exercises['ring-fallout'], P.exercises, park), ['plank']);
+check('while at home both are on offer',
+  PR.alternativesFor(P.exercises['ring-fallout'], P.exercises, home), ['ring-fallout', 'plank']);
+check('and an empty room offers only the plank',
+  PR.alternativesFor(P.exercises['ring-fallout'], P.exercises, {}), ['plank']);
+
+// The engine must not invent cross-pattern swaps: a row is not a pull-up.
+check('nothing crosses a pattern boundary',
+  Object.keys(P.exercises).every((id) =>
+    PR.alternativesFor(P.exercises[id], P.exercises, home)
+      .every((o) => P.exercises[o].pattern === P.exercises[id].pattern)), true);
+
+// ---------------------------------------------------------------- //
+section('The small helpers everything else leans on');
+
+// Weeks, not sessions, are half of what gates a phase — nine sessions crammed
+// into ten days is not a completed reintroduction. A bad date has to read as
+// "no time has passed" rather than NaN, which would compare false against every
+// gate and silently freeze you in phase 1 forever.
+check('a week apart is one week', PR.weeksBetween('2026-01-01', '2026-01-08'), 1);
+check('and it is fractional, not rounded', PR.weeksBetween('2026-01-01', '2026-01-05'), 4 / 7);
+check('no start date means no time has passed', PR.weeksBetween(null, '2026-01-08'), 0);
+check('an unparseable date is zero, not NaN', PR.weeksBetween('never', '2026-01-08'), 0);
+check('and so is an unparseable end', PR.weeksBetween('2026-01-01', 'whenever'), 0);
+check('going backwards never yields a negative week',
+  PR.weeksBetween('2026-01-08', '2026-01-01'), 0);
+
+// Loads are shown to a tenth and stored to a tenth, so that 0.1 + 0.2 never
+// reaches the screen as 0.30000000000000004.
+check('a half step rounds clean', PR.roundKg(1.25), 1.3);
+check('float noise is flattened', PR.roundKg(0.1 + 0.2), 0.3);
+check('and a whole number is left alone', PR.roundKg(4), 4);
+
+check('no load reads as bodyweight, not "+0 kg"', PR.fmtKg(0), 'bodyweight');
+check('a whole number drops the decimal', PR.fmtKg(2), '+2 kg');
+check('a half is kept', PR.fmtKg(2.5), '+2.5 kg');
+check('and the sign is always there, because it is added weight', PR.fmtKg(10)[0], '+');
+
+// The rules are the defaults evaluate() falls back to. Pinned because a typo
+// here changes progression everywhere at once and nothing else would notice.
+check('the rules are all present and positive',
+  Object.entries(PR.DEFAULT_RULES).filter(([, v]) => typeof v !== 'number' || v <= 0).map(([k]) => k),
+  []);
+check('the first vest step is at least as big as the step after it',
+  PR.DEFAULT_RULES.vestFirstKg >= PR.DEFAULT_RULES.vestStepKg, true);
+check('and the ceiling is above the first step',
+  PR.DEFAULT_RULES.vestMaxKg > PR.DEFAULT_RULES.vestFirstKg, true);
+check('a deload cannot take more than the ceiling allows',
+  PR.DEFAULT_RULES.vestStepKg * 2 <= PR.DEFAULT_RULES.vestMaxKg, true);
+
 // ---------------------------------------------------------------- //
 section('Claims in the data match the data');
+
+// An exercise NAME must not hardcode equipment it does not actually require.
+// "Ring chin-ups" done on a park bar is a regular chin-up, and calling it a
+// ring chin-up made the app look like it was missing an option it already had:
+// the requirement is a capability, so the name has to describe the MOVEMENT and
+// let the kit chip name the object.
+const withoutRings = PR.capabilities(
+  { has: Object.keys(P.equipment).filter((t) => t !== 'rings' && t !== 'straps') },
+  P.equipment);
+const equipmentWords = /\b(ring|strap|bar|sofa|chair|bench|box)s?\b/i;
+check('no exercise names equipment it can be done without',
+  Object.entries(P.exercises)
+    .filter(([, ex]) => ex.ladder.some((_, i) => PR.rung(ex, i).needs.every((c) => withoutRings[c])))
+    .filter(([, ex]) => equipmentWords.test(ex.name))
+    .map(([id]) => id), []);
+
+// Same rule for the coaching. "Rings turned out at the top" is wrong advice on
+// a fixed bar, and it appears on a rung the bar can do. Ring-specific coaching
+// is fine where the rung genuinely needs rings, or where it says "on rings".
+const ringCue = (t) => /\bring/i.test(t) && !/\bon rings\b/i.test(t);
+check('no cue assumes rings on a rung that does not need them',
+  Object.entries(P.exercises).flatMap(([id, ex]) =>
+    ex.ladder.map((_, i) => [id, i, PR.rung(ex, i)])
+      .filter(([, , r]) => r.needs.every((c) => withoutRings[c]))
+      .flatMap(([, i, r]) => (r.cues || []).filter(ringCue).map((c) => id + ' L' + (i + 1) + ': ' + c))),
+  []);
+
+// Every pattern needs its plain-words reading, or a card would show a muscle
+// group for some exercises and nothing for others.
+check('every pattern says what it trains',
+  [...new Set(Object.values(P.exercises).map((e) => e.pattern))].filter((p) => !P.trains[p]), []);
+check('and nothing claims a pattern the program does not use',
+  Object.keys(P.trains).filter((p) =>
+    !Object.values(P.exercises).some((e) => e.pattern === p)), []);
 
 // The prose used to say the calf raises were supersetted with the face pulls
 // long after they stopped being.

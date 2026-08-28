@@ -1,11 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0f1320" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://raw.githubusercontent.com data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
   <title>Workout Program — rings & push-up bars</title>
-  <meta name="description" content="Local-first tracker for a 3x/week home ring workout, with automatic double-progression and vest microloading." />
+  <meta name="description" content="Local-first tracker for a 2–3x/week home ring workout, with automatic double-progression and vest microloading." />
+  <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="styles.css" />
 
   <!-- Installable: launches fullscreen from the home screen, no browser chrome. -->
@@ -28,25 +30,40 @@
       <button class="sound-test" data-act="test-sound" title="Test the sound" aria-label="Test the sound">🔊</button>
       <div class="phase-badge" id="phaseBadge" title="Training phase"></div>
     </div>
-    <nav class="wrap tabs" role="tablist">
-      <button class="tab" data-tab="today" role="tab" aria-selected="true">Today</button>
-      <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
-      <button class="tab" data-tab="program" role="tab" aria-selected="false">Program</button>
-      <button class="tab" data-tab="data" role="tab" aria-selected="false">Data</button>
+    <nav class="wrap tabs" role="tablist" aria-label="Workout sections">
+      <button id="tab-today" class="tab" data-tab="today" role="tab" aria-controls="view-today" aria-selected="true" tabindex="0">Today</button>
+      <button id="tab-history" class="tab" data-tab="history" role="tab" aria-controls="view-history" aria-selected="false" tabindex="-1">History</button>
+      <button id="tab-program" class="tab" data-tab="program" role="tab" aria-controls="view-program" aria-selected="false" tabindex="-1">Program</button>
+      <button id="tab-data" class="tab" data-tab="data" role="tab" aria-controls="view-data" aria-selected="false" tabindex="-1">Data</button>
     </nav>
   </header>
 
   <main class="wrap">
-    <section id="view-today" class="view" role="tabpanel"></section>
-    <section id="view-history" class="view" role="tabpanel" hidden></section>
-    <section id="view-program" class="view" role="tabpanel" hidden></section>
-    <section id="view-data" class="view" role="tabpanel" hidden></section>
+    <section id="view-today" class="view" role="tabpanel" aria-labelledby="tab-today" tabindex="0"></section>
+    <section id="view-history" class="view" role="tabpanel" aria-labelledby="tab-history" tabindex="0" hidden></section>
+    <section id="view-program" class="view" role="tabpanel" aria-labelledby="tab-program" tabindex="0" hidden></section>
+    <section id="view-data" class="view" role="tabpanel" aria-labelledby="tab-data" tabindex="0" hidden></section>
   </main>
+
+  <div class="storage-warning" id="storageWarning" role="alert" hidden>
+    <div class="wrap">
+      <strong>Workout data needs attention.</strong>
+      <span id="storageWarningWhat">Browser storage is unavailable or full. Keep this page open and download a backup.</span>
+      <button class="btn btn-sm" id="storageWarningExport">Download recovery data</button>
+    </div>
+  </div>
+
+  <div class="update-notice" id="updateNotice" role="status" aria-live="polite" hidden>
+    <div class="wrap">
+      <span>A new version is ready.</span>
+      <button class="btn btn-sm" id="updateReload">Reload app</button>
+    </div>
+  </div>
 
   <!-- Never expected to show. When it does, the point is that your logged sets
        are already safe and the session can be finished — a blank page says
        neither. -->
-  <div class="crash" id="crash" hidden>
+  <div class="crash" id="crash" role="alert" aria-live="assertive" hidden>
     <div class="wrap">
       <strong>Something went wrong <span id="crashWhere"></span></strong>
       <div class="crash-what" id="crashWhat"></div>
@@ -59,7 +76,7 @@
     </div>
   </div>
 
-  <div class="rest-bar" id="restBar" hidden>
+  <div class="rest-bar" id="restBar" aria-label="Rest timer" hidden>
     <button class="rest-skip" id="restSkip" aria-label="Skip rest">✕</button>
     <div class="rest-body">
       <div class="rest-time" id="restTime">0:00</div>

@@ -9,10 +9,12 @@
  * never touches. Clearing this cache only forces a re-download of the app.
  */
 var VERSION = "v5";
-var CACHE = "workout-program-" + VERSION;
+var CACHE_PREFIX = "workout-program-";
+var CACHE = CACHE_PREFIX + VERSION;
 
-/* Illustrations. Deliberately NOT in SHELL: they are fetched in the background
- * after activation so a 2.4 MB set never delays startup, but they must be
+/* Illustrations. Deliberately NOT in SHELL: the page asks the active worker to
+ * fetch them in a waitUntil-backed background task, so a 2.4 MB set never
+ * delays installation, but they must be
  * fetched eagerly rather than on first view — otherwise going offline leaves
  * every exercise you happen not to have opened without a picture.
  * Regenerated whenever images change; a test asserts it has not drifted. */
@@ -22,6 +24,7 @@ var MEDIA = [
   "./images/hip-thrust-L3.gif",
   "./images/hip-thrust-L4.gif",
   "./images/pike-pushup.gif",
+  "./images/plank.svg",
   "./images/pushup.gif",
   "./images/ring-dip.svg",
   "./images/ring-facepull.gif",
@@ -48,6 +51,7 @@ var SHELL = [
   "./progression.js",
   "./patch.js",
   "./audio.js",
+  "./tokens.css",
   "./styles.css",
   "./data/images.js",
   "./data/program.js",
@@ -61,13 +65,9 @@ self.addEventListener("install", function (e) {
     caches
       .open(CACHE)
       .then(function (c) {
-        /* addAll is atomic — one 404 and nothing is cached. Add individually so
-         * a missing optional file cannot break the whole install. */
-        return Promise.all(
-          SHELL.map(function (url) {
-            return c.add(url).catch(function () {});
-          })
-        );
+        /* Every entry is required to boot offline. Keep installation atomic so
+         * a worker with half a shell never activates and claims the page. */
+        return c.addAll(SHELL);
       })
       .then(function () {
         return self.skipWaiting();
@@ -82,23 +82,57 @@ self.addEventListener("activate", function (e) {
       .then(function (keys) {
         return Promise.all(
           keys.map(function (k) {
-            return k === CACHE ? null : caches.delete(k);
+            /* Cache Storage is shared by every app on an origin. GitHub Pages
+             * hosts several repository sites together, so only remove older
+             * caches that belong to this app. */
+            return k !== CACHE && k.indexOf(CACHE_PREFIX) === 0 ? caches.delete(k) : null;
           })
         );
       })
       .then(function () {
         return self.clients.claim();
       })
-      .then(function () {
-        /* Not awaited: warming the illustrations must not hold up activation. */
-        caches.open(CACHE).then(function (c) {
-          MEDIA.forEach(function (url) {
-            c.match(url).then(function (hit) {
-              if (!hit) c.add(url).catch(function () {});
-            });
-          });
-        });
+  );
+});
+
+/* A message task is used instead of an unobserved promise in activate. The
+ * browser is allowed to terminate a worker as soon as its event settles, so
+ * fire-and-forget warming could stop halfway through. waitUntil keeps this
+ * worker alive, while leaving install/activate fast and atomic. */
+function warmMedia() {
+  return caches.open(CACHE).then(function (cache) {
+    var ready = 0;
+    var failed = 0;
+    return Promise.all(
+      MEDIA.map(function (url) {
+        return cache
+          .match(url)
+          .then(function (hit) {
+            if (hit) return true;
+            return cache.add(url).then(function () { return true; });
+          })
+          .then(function () { ready += 1; })
+          .catch(function () { failed += 1; });
       })
+    ).then(function () {
+      return { ready: ready, failed: failed, total: MEDIA.length };
+    });
+  });
+}
+
+self.addEventListener("message", function (e) {
+  if (!e.data || e.data.type !== "CACHE_MEDIA") return;
+  e.waitUntil(
+    warmMedia().then(function (status) {
+      if (e.source && e.source.postMessage) {
+        e.source.postMessage({
+          type: "MEDIA_CACHE_STATUS",
+          ready: status.ready,
+          failed: status.failed,
+          total: status.total,
+        });
+      }
+    })
   );
 });
 
@@ -110,10 +144,32 @@ self.addEventListener("activate", function (e) {
  * request, so a 304 costs almost nothing. */
 function revalidating(req) {
   try {
-    return new Request(req.url, { cache: "no-cache", credentials: "same-origin" });
+    /* Clone the original request so headers, range, mode, integrity and future
+     * request fields survive; only the browser-cache policy changes. */
+    return new Request(req, { cache: "no-cache" });
   } catch (err) {
     return req;
   }
+}
+
+/* A stalled connection is worse than being offline: fetch can wait for the
+ * radio for many seconds before rejecting. Race it against a short deadline so
+ * an already-cached screen opens promptly. The original request deliberately
+ * keeps running and refreshes the cache if the connection eventually answers. */
+function networkWithTimeout(req) {
+  var network = fetch(revalidating(req)).then(function (res) {
+    if (res && res.ok) {
+      var copy = res.clone();
+      caches.open(CACHE).then(function (c) {
+        c.put(req, copy);
+      });
+    }
+    return res;
+  });
+  var deadline = new Promise(function (_, reject) {
+    setTimeout(function () { reject(new Error("network timeout")); }, 2500);
+  });
+  return Promise.race([network, deadline]);
 }
 
 self.addEventListener("fetch", function (e) {
@@ -146,16 +202,7 @@ self.addEventListener("fetch", function (e) {
   }
 
   e.respondWith(
-    fetch(revalidating(req))
-      .then(function (res) {
-        if (res && res.ok) {
-          var copy = res.clone();
-          caches.open(CACHE).then(function (c) {
-            c.put(req, copy);
-          });
-        }
-        return res;
-      })
+    networkWithTimeout(req)
       .catch(function () {
         return caches.match(req).then(function (hit) {
           if (hit) return hit;

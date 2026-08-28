@@ -12,6 +12,18 @@
   var DP = window.DomPatch;
   var CUES = window.Cues;
   var KEY = "workout-program:v1";
+  var MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+  var MAX_SESSIONS = 5000;
+  var MAX_SETS_PER_ENTRY = 100;
+  var MAX_TOTAL_SETS = 100000;
+  var storageIssue = "";
+  var rejectedPayload = null;
+  var mediaCacheState =
+    location.protocol.indexOf("http") === 0 && "serviceWorker" in navigator
+      ? "Waiting for the offline cache…"
+      : "Unavailable in this launch mode.";
+  var mediaCacheBad = false;
+  var updateReady = false;
 
   if (!P || !PR || !DP || !CUES) {
     document.getElementById("view-today").innerHTML =
@@ -31,6 +43,9 @@
     holdCallEvery: 10, // call the time out every N seconds during a hold; 0 = off
     sound: "voice", // "voice" | "beep" | "off"
     sessionCapMin: 0, // 0 = run the full program, no trimming
+    kit: P.places.home.has.slice(), // the equipment in front of you right now
+    variant: {}, // slot ("A:ring-pullup") -> the exercise you chose instead
+    gear: {}, // capability ("hang-high") -> which of the ticked things provides it
     phaseOverride: 0, // 0 = automatic
     restTimer: true,
     bodyweightKg: null,
@@ -42,41 +57,160 @@
   var migrated = false;
   var state = load();
 
+  function clone(v) {
+    if (Array.isArray(v)) return v.slice();
+    if (v && typeof v === "object") {
+      var out = {};
+      for (var k in v) out[k] = v[k];
+      return out;
+    }
+    return v;
+  }
+
+  function isRecord(v) {
+    return !!v && typeof v === "object" && !Array.isArray(v);
+  }
+
+  function validateEntries(entries, active, tally) {
+    if (!isRecord(entries)) throw new Error("entries must be an object");
+    Object.keys(entries).forEach(function (id) {
+      if (active && !P.exercises[id]) throw new Error("active session contains an unknown exercise");
+      var entry = entries[id];
+      if (!isRecord(entry) || !Array.isArray(entry.sets))
+        throw new Error("an exercise entry has no set list");
+      if (entry.sets.length > MAX_SETS_PER_ENTRY)
+        throw new Error("an exercise entry contains too many sets");
+      tally.sets += entry.sets.length;
+      if (tally.sets > MAX_TOTAL_SETS) throw new Error("backup contains too many sets");
+      entry.sets.forEach(function (set) {
+        if (!isRecord(set)) throw new Error("a set is not an object");
+        ["value", "load"].forEach(function (key) {
+          if (set[key] !== null && set[key] !== undefined &&
+              (typeof set[key] !== "number" || !isFinite(set[key]) || set[key] < 0))
+            throw new Error("a set contains an invalid " + key);
+        });
+      });
+    });
+  }
+
+  function validateState(s) {
+    if (!isRecord(s)) throw new Error("backup root must be an object");
+    if (s.settings !== undefined && !isRecord(s.settings))
+      throw new Error("settings must be an object");
+    if (s.exerciseState !== undefined && !isRecord(s.exerciseState))
+      throw new Error("exerciseState must be an object");
+    Object.keys(s.exerciseState || {}).forEach(function (id) {
+      if (!isRecord(s.exerciseState[id])) throw new Error("an exercise state is invalid");
+    });
+    var settings = s.settings || {};
+    if (settings.kit !== undefined &&
+        (!Array.isArray(settings.kit) || settings.kit.some(function (k) { return !P.equipment[k]; })))
+      throw new Error("equipment settings are invalid");
+    if (settings.gear !== undefined && !isRecord(settings.gear))
+      throw new Error("gear settings are invalid");
+    if (settings.variant !== undefined && !isRecord(settings.variant))
+      throw new Error("exercise choices are invalid");
+    if (settings.sound !== undefined && ["voice", "beep", "off"].indexOf(settings.sound) < 0)
+      throw new Error("sound setting is invalid");
+    ["audioWarmupMs", "holdLeadIn", "holdCallEvery", "sessionCapMin", "phaseOverride", "bodyweightKg"]
+      .forEach(function (key) {
+        if (settings[key] !== undefined && settings[key] !== null &&
+            (typeof settings[key] !== "number" || !isFinite(settings[key])))
+          throw new Error(key + " setting is invalid");
+      });
+    if (settings.restTimer !== undefined && typeof settings.restTimer !== "boolean")
+      throw new Error("rest timer setting is invalid");
+    if (!Array.isArray(s.sessions)) throw new Error("sessions must be an array");
+    if (s.sessions.length > MAX_SESSIONS) throw new Error("backup contains too many sessions");
+    var tally = { sets: 0 };
+    s.sessions.forEach(function (session) {
+      if (!isRecord(session) || !P.workouts[session.workout])
+        throw new Error("a session has an invalid workout");
+      validateEntries(session.entries, false, tally);
+    });
+    if (s.active !== undefined && s.active !== null) {
+      if (!isRecord(s.active) || !P.workouts[s.active.workout])
+        throw new Error("active session has an invalid workout");
+      validateEntries(s.active.entries, true, tally);
+    }
+    if (s.nextOverride !== undefined && s.nextOverride !== null && !P.workouts[s.nextOverride])
+      throw new Error("next workout override is invalid");
+  }
+
+  function prepareState(raw, strictExport) {
+    if (strictExport && (!isRecord(raw) || !Array.isArray(raw.sessions)))
+      throw new Error("not a workout export");
+    if (raw && typeof raw.version === "number" && raw.version > PR.SCHEMA)
+      throw new Error("backup was created by a newer version of Workout");
+    var m = PR.migrate(raw, P);
+    var s = m.state;
+    if (!Array.isArray(s.sessions)) s.sessions = [];
+    validateState(s);
+    var settings = {};
+    for (var k in DEFAULT_SETTINGS) {
+      var stored = s.settings && s.settings[k] !== undefined ? s.settings[k] : null;
+      settings[k] = stored !== null ? stored : clone(DEFAULT_SETTINGS[k]);
+    }
+    return {
+      migrated: m.migrated,
+      notes: m.migrated ? m.notes : [],
+      state: {
+        version: PR.SCHEMA,
+        settings: settings,
+        exerciseState: s.exerciseState || {},
+        sessions: s.sessions,
+        active: s.active || null,
+        nextOverride: s.nextOverride || null,
+      },
+    };
+  }
+
   function load() {
-    var raw = null;
+    var raw = null, prepared, storedText = null;
     try {
-      raw = JSON.parse(localStorage.getItem(KEY) || "null");
+      storedText = localStorage.getItem(KEY);
+      raw = JSON.parse(storedText || "null");
     } catch (e) {
-      raw = null;
+      storageIssue = "Stored workout data is not valid JSON. A fresh in-memory state was opened.";
+      rejectedPayload = storedText;
     }
     /* Run stored data through the schema steps BEFORE reading any of it, so a
      * shape change is handled in one place instead of by defensive checks
      * scattered through the app. */
-    var m = PR.migrate(raw, P);
-    var s = m.state;
-    migrated = m.migrated;
-    migrationNotes = m.migrated ? m.notes : [];
-    var settings = {};
-    for (var k in DEFAULT_SETTINGS) {
-      settings[k] = s.settings && s.settings[k] !== undefined ? s.settings[k] : DEFAULT_SETTINGS[k];
+    try {
+      prepared = prepareState(raw);
+    } catch (e) {
+      storageIssue = "Stored workout data was rejected: " + e.message;
+      rejectedPayload = storedText;
+      prepared = prepareState(null);
     }
-    return {
-      version: PR.SCHEMA,
-      settings: settings,
-      exerciseState: s.exerciseState || {},
-      sessions: Array.isArray(s.sessions) ? s.sessions : [],
-      active: s.active || null,
-      nextOverride: s.nextOverride || null,
-    };
+    migrated = prepared.migrated;
+    migrationNotes = prepared.notes;
+    return prepared.state;
   }
 
   function save() {
     invalidatePlan();
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
+      storageIssue = "";
+      rejectedPayload = null;
+      showStorageWarning();
+      return true;
     } catch (e) {
       console.warn("Could not save:", e);
+      storageIssue = "Browser storage is unavailable or full (" +
+        ((e && e.name) || "write failed") + "). Keep this page open and download a backup.";
+      showStorageWarning();
+      return false;
     }
+  }
+
+  function showStorageWarning() {
+    var box = document.getElementById("storageWarning");
+    if (!box) return;
+    box.hidden = !storageIssue;
+    if (storageIssue) document.getElementById("storageWarningWhat").textContent = storageIssue;
   }
 
   function exState(id) {
@@ -185,11 +319,114 @@
     return PR.nextWorkout(state.sessions);
   }
 
-  function workoutItems(key) {
-    return P.workouts[key].order.filter(function (o) {
-      return !!P.exercises[o.id];
-    });
+  /* Where you are, and what it can do. */
+  /* There is one source of truth for where you are: the equipment you ticked.
+   * A named place is a BUTTON that fills that list, not a mode — so "Home plus
+   * the high bar I just bought" is expressible, which it was not when the
+   * places were fixed lists in the program. */
+  function currentKit() {
+    var k = state.settings.kit;
+    return Array.isArray(k) ? k : [];
   }
+
+  /* Which preset, if any, the ticks currently match — for highlighting only. */
+  function matchingPlace() {
+    var have = currentKit().slice().sort().join("|");
+    return (
+      Object.keys(P.places).find(function (pid) {
+        return P.places[pid].has.slice().sort().join("|") === have;
+      }) || null
+    );
+  }
+
+  function currentPlace() {
+    var pid = matchingPlace();
+    return { label: (pid && P.places[pid].label) || "Custom", has: currentKit() };
+  }
+
+  function caps() {
+    return PR.capabilities(currentPlace(), P.equipment, state.settings.gear);
+  }
+
+  /* The capabilities this rung needs that more than one thing here could
+   * provide — i.e. the questions worth asking. Keyed by CAPABILITY, not by
+   * exercise: "what do I hang from" has one answer, and it covers the chin-up,
+   * the pull-up, the dead hang, the scap pull and the leg raise at once. */
+  function gearChoices(t) {
+    var place = currentPlace();
+    var out = [];
+    (t.needs || []).forEach(function (cap) {
+      var opts = PR.providersFor(cap, place, P.equipment);
+      if (opts.length > 1) out.push({ cap: cap, options: opts });
+    });
+    return out;
+  }
+
+  /* The day's order, resolved against the place: every entry carries the
+   * highest level this room can actually support, and anything with no usable
+   * level at all is left out and reported separately rather than silently
+   * vanishing from the session. */
+  /* Which exercise fills a slot, given what you picked.
+   *
+   * Keyed by WORKOUT AND SLOT, not by pattern: A does pull-ups and B does
+   * chin-ups on purpose, and a per-pattern key would collapse that the moment
+   * you swapped either one. */
+  function slotKey(workout, id) {
+    return workout + ":" + id;
+  }
+
+  function chosenFor(workout, o) {
+    var picked = (state.settings.variant || {})[slotKey(workout, o.id)];
+    return (picked && P.exercises[picked] && picked) || o.id;
+  }
+
+  function workoutItems(key) {
+    var c = caps();
+    var out = [];
+    P.workouts[key].order.forEach(function (slot) {
+      /* A deliberate swap behaves exactly like the prescribed exercise from
+       * here on — including being substituted away if the room cannot do it. */
+      var o = slot;
+      var pick = chosenFor(key, slot);
+      if (pick !== slot.id) {
+        o = {};
+        for (var kk in slot) o[kk] = slot[kk];
+        o.id = pick;
+        o.setCount = slot.setCount || P.exercises[slot.id].sets;
+        o.chosenOver = slot.id;
+        /* The offset tuned A's row against B's belongs to the exercise it was
+         * measured on, not to whatever you swap in. */
+        delete o.levelOffset;
+      }
+      var ex = P.exercises[o.id];
+      if (!ex) return;
+      var st = exState(o.id);
+      var here = PR.usableLevel(ex, st.level + (o.levelOffset || 0), c);
+      if (here >= 0) {
+        var e = {};
+        for (var k in o) e[k] = o[k];
+        e.levelHere = here;
+        e.slot = slot.id;
+        out.push(e);
+        return;
+      }
+      /* Nothing on this ladder is possible here, so reach for something that
+       * trains the same pattern and is. The volume the workout asked for
+       * carries over; the level does not, because it belongs to the exercise. */
+      var sub = PR.substituteFor(ex, P.exercises, c);
+      if (!sub) return;
+      out.push({
+        id: sub,
+        setCount: o.setCount || ex.sets,
+        levelHere: PR.usableLevel(P.exercises[sub], exState(sub).level, c),
+        standsInFor: o.id,
+        slot: slot.id,
+      });
+    });
+    return out;
+  }
+
+
 
   var CAPS = [30, 40, 50, 0]; // 0 = full
 
@@ -217,6 +454,10 @@
         trimPriority: ex.trimPriority || 0,
         minSets: ex.minSets || 1,
         fixed: ex.progression === "fixed",
+        /* Carried through so the swap list stays anchored to the SLOT: without
+         * it the options would reorder under your thumb every time you picked
+         * one, because the list is built around whichever is showing. */
+        slot: o.slot || o.id,
       };
     });
   }
@@ -276,7 +517,11 @@
     var resolved = workoutItems(key).map(function (o) {
       var ex = P.exercises[o.id];
       var e = trimmedEntry(o, key);
-      return { id: o.id, ex: ex, entry: e, target: PR.target(ex, exState(o.id), phase, e) };
+      /* `slot` is the exercise the WORKOUT names, which is not `id` once you
+       * have swapped. The swap list is built around it so the options keep a
+       * stable order instead of reshuffling under your thumb as you pick. */
+      return { id: o.id, slot: o.slot || o.id, ex: ex, entry: e,
+        target: PR.target(ex, exState(o.id), phase, e) };
     });
     var groups = [];
     P.stationOrder.forEach(function (stKey) {
@@ -633,6 +878,28 @@
     return best;
   }
 
+  /* How this session is actually going: what is left, at the pace you are
+   * really working at.
+   *
+   * This exists because of a real session. Workout B ran out of time and the
+   * last three exercises were simply not done — the hip work and the overhead
+   * press, which are the two things that day exists to provide. Nothing warned
+   * anybody, because the app only ever showed the estimate it made BEFORE you
+   * started and a clock counting up. Neither answers "am I going to finish". */
+  function pacing() {
+    if (!state.active) return null;
+    var entries = state.active.entries;
+    return PR.project(
+      liveTimeline(),
+      function (id, set) {
+        var e = entries[id];
+        var st = e && e.sets[set];
+        return !!(st && (st.done || isSkipped(st)));
+      },
+      sessionElapsedSec()
+    );
+  }
+
   /* What to do the moment a set is logged — walked off the timeline rather than
    * worked out separately, so "is there a rest between these two?" has exactly
    * one answer in the whole app. */
@@ -930,12 +1197,6 @@
     if (!candidates.length) return ""; // nothing to show, and nothing to ask for
     var src = candidates[0];
     var chain = candidates.slice(1);
-    /* Single quotes on purpose: the attribute itself is double-quoted, so a
-     * JSON array would close it early and silently break the handler. */
-    var onerr = chain.length
-      ? "var c=['" + chain.join("','") + "'];var i=+(this.dataset.i||0);" +
-        "if(i<c.length){this.dataset.i=i+1;this.src=c[i]}else{this.parentNode.remove()}"
-      : "this.parentNode.remove()";
     var credit = isGymVisual(src, id)
       ? '<figcaption class="img-credit">© <a href="https://gymvisual.com/" target="_blank" rel="noopener noreferrer">Gym visual</a></figcaption>'
       : "";
@@ -950,47 +1211,68 @@
         ? ' crossorigin="anonymous"'
         : "";
     return (
-      '<figure class="ex-figure"><img class="ex-img" alt=""' + cors + ' src="' +
-      src +
-      '" onload="this.parentNode.style.display=\'block\'" onerror="' +
-      onerr +
-      '">' +
+      '<figure class="ex-figure"><img class="ex-img" alt=""' + cors +
+      ' data-src="' + esc(src) + '" data-fallbacks="' + esc(JSON.stringify(chain)) + '">' +
       credit +
       "</figure>"
     );
   }
 
-  function videoLink(ex, label) {
+  /* The query names the movement, and the equipment you actually chose is
+   * prepended — searching "ring pull ups" while you are hanging off a park bar
+   * sends you to the wrong video, and the exercise no longer knows which it is. */
+  function searchFor(ex, t) {
     if (!ex.search) return "";
+    var c = caps();
+    var seen = {}, words = [];
+    ((t && t.needs) || []).forEach(function (cap) {
+      var token = c[cap];
+      if (!token || seen[token] || !P.equipment[token]) return;
+      seen[token] = 1;
+      words.push(P.equipment[token].label);
+    });
+    return (words.join(" ") + " " + ex.search).trim();
+  }
+
+  function videoLink(ex, label, t) {
+    var q = searchFor(ex, t);
+    if (!q) return "";
     return (
       '<a class="vid-btn" target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/results?search_query=' +
-      encodeURIComponent(ex.search) +
+      encodeURIComponent(q) +
       '">▶ ' +
       (label || "Show me how") +
       ' <span class="vid-q">' +
-      esc(ex.search) +
+      esc(q) +
       "</span></a>"
     );
   }
 
-  var KIT_LABEL = {
-    rings: "rings",
-    bars: "push-up bars",
-    sofa: "sofa chair 20 cm",
-    chair: "chair 45 cm",
-  };
   /* Abbreviated for the header, where a long list wraps the sticky bar onto a
    * second line and costs real screen height on a phone. */
-  var KIT_SHORT = { rings: "rings", bars: "bars", sofa: "sofa 20", chair: "chair 45" };
+  var KIT_SHORT = {
+    "push-up bars": "bars",
+    "sofa chair 20 cm": "sofa 20",
+    "chair 45 cm": "chair 45",
+    "parallel bars": "dip bars",
+  };
 
   /* What this exercise needs AT THE LEVEL YOU ARE ON — push-ups start on the
    * bars and end up in the rings, so a fixed per-exercise list would be wrong
    * most of the time. The level's own kit is already resolved into the target. */
-  function kitFor(t, short) {
-    var map = short ? KIT_SHORT : KIT_LABEL;
-    var chips = (t.kit || []).map(function (k) {
-      return map[k] || k;
+  /* `except` drops capabilities the card has already asked about above: with a
+   * HANG FROM row offering rings or a bar right there, repeating "rings" in the
+   * summary chips underneath says the same thing twice. */
+  function kitFor(t, short, except) {
+    var needs = (t.needs || []).filter(function (cap) {
+      return !except || except.indexOf(cap) < 0;
     });
+    var chips = PR.kitFor(needs, caps(), P.equipment);
+    if (short) {
+      chips = chips.map(function (c) {
+        return KIT_SHORT[c] || c;
+      });
+    }
     if (t.vest) chips.push("vest " + trimNum(t.vest) + (short ? "kg" : " kg"));
     return chips;
   }
@@ -1095,6 +1377,8 @@
                 (key === w ? " pick-btn--on" : "") +
                 '" data-act="pick-workout" data-w="' +
                 w +
+                '" aria-pressed="' +
+                (key === w ? "true" : "false") +
                 '">' +
                 w +
                 "</button>"
@@ -1109,6 +1393,7 @@
       " · ~" +
       Math.round(b.seconds / 60) +
       " min</div>" +
+      pacingLine() +
       "</div>" +
       '<div class="sh-right">' +
       (active
@@ -1121,6 +1406,70 @@
       "</div>" +
       "</div>";
 
+    /* Where you are decides what the session can contain, so it sits with the
+     * other two things you choose before starting rather than in Settings. */
+    {
+      var here = matchingPlace();
+      html += '<div class="cap-row" id="placeRow"><span class="cap-label">Where</span>';
+      Object.keys(P.places).forEach(function (pid) {
+        html +=
+          '<button class="chip cap' +
+          (here === pid ? " cap--on" : "") +
+          '" data-act="set-place" data-place="' +
+          pid +
+          '" aria-pressed="' +
+          (here === pid ? "true" : "false") +
+          '">' +
+          esc(P.places[pid].label) +
+          "</button>";
+      });
+      /* Ticks that match no preset are a real answer, not a broken state —
+       * shown so the row never reads as "nowhere". */
+      if (!here) html += '<span class="cap cap--on chip is-static">Custom</span>';
+      html += "</div>";
+
+      /* Always visible, never a separate mode. A preset is a shortcut that
+       * fills this list; the list is what actually decides the session, so
+       * hiding it behind a mode meant the one screen that answers "why is
+       * this exercise missing?" was the one you could not see. */
+      var have = currentKit();
+      html += '<div class="kit-pick" id="kitPick">';
+      Object.keys(P.equipment).forEach(function (token) {
+        html +=
+          '<button class="chip kit-tick' +
+          (have.indexOf(token) >= 0 ? " kit-tick--on" : "") +
+          '" data-act="toggle-kit" data-kit="' +
+          token +
+          '" aria-pressed="' +
+          (have.indexOf(token) >= 0 ? "true" : "false") +
+          '">' +
+          esc(P.equipment[token].label) +
+          "</button>";
+      });
+      html += "</div>";
+      if (!have.length) {
+        html +=
+          '<p class="hint" id="kitEmpty">Nothing ticked, so you get what needs no equipment at ' +
+          "all. Tick whatever is in the room.</p>";
+      }
+
+      /* Reported as PATTERNS, not exercises. Losing push-ups because there are
+       * no bars is not a loss — a push-up on the floor trains the same thing.
+       * Losing anti-extension because everything that trains it needs rings
+       * is. Only the second is worth telling you about. */
+      var gaps = PR.gapsAt(P.workouts[key].order, P.exercises, caps());
+      if (gaps.length) {
+        html +=
+          '<p class="hint cap-note warn" id="placeNote">Nothing here trains <strong>' +
+          gaps
+            .map(function (p) {
+              return esc(patternLabel(p));
+            })
+            .join("</strong> or <strong>") +
+          "</strong>. Everything else is covered, at whatever level this place supports.</p>";
+      }
+    }
+
     html += '<div class="cap-row" id="capRow"><span class="cap-label">Time today</span>';
     CAPS.forEach(function (c) {
       html +=
@@ -1128,6 +1477,8 @@
         (state.settings.sessionCapMin === c ? " cap--on" : "") +
         '" data-act="set-cap" data-cap="' +
         c +
+        '" aria-pressed="' +
+        (state.settings.sessionCapMin === c ? "true" : "false") +
         '">' +
         (c ? c + " min" : "Full") +
         "</button>";
@@ -1198,14 +1549,17 @@
         g.station.icon +
         "</span>" +
         '<div class="st-text"><div class="st-label">' +
-        esc(g.station.label) +
+        esc(stationLabel(g.key)) +
         '<span class="st-count">' +
         (gi + 1) +
         " / " +
         groups.length +
-        '</span></div><div class="st-setup">' +
-        esc(g.station.setup) +
-        "</div></div>" +
+        "</span></div>" +
+        /* The setup text exists because the rings have to be re-rigged. Where
+         * nothing is adjustable there is nothing to set up, and telling you to
+         * hang rings you have not got is worse than saying nothing. */
+        (adjustableHere() ? '<div class="st-setup">' + esc(g.station.setup) + "</div>" : "") +
+        "</div>" +
         "</div>";
       var opened = false;
       g.items.forEach(function (it, ii) {
@@ -1215,7 +1569,7 @@
           opened = true;
           if (gi === 0) html += '<div class="work-start work-start--warm"><span>Warm-up</span></div>';
         }
-        if (!workStarted && it.ex.pattern !== "prehab") {
+        if (!workStarted && PR.groupOf(it.ex.pattern) !== "prehab") {
           workStarted = true;
           html += '<div class="work-start"><span>Working sets</span></div>';
         }
@@ -1246,7 +1600,7 @@
               "</span><small>resting · " +
               esc(following.ex.name) +
               ' next</small><button class="btn btn-ghost btn-sm" data-act="rest-skip">Skip</button></div>'
-            : '<div class="flow flow--rest" data-act="rest-now" data-rest="' +
+            : '<button type="button" class="flow flow--rest" data-act="rest-now" data-rest="' +
               restFor(it.id, key) +
               '" data-restname="' +
               esc(it.ex.name) +
@@ -1255,7 +1609,7 @@
               restFor(it.id, key) +
               " s</span><small>before " +
               (following ? esc(following.ex.name) : "the next exercise") +
-              "</small></div>";
+              "</small></button>";
         }
       });
       html += "</div>";
@@ -1277,6 +1631,39 @@
     return html;
   }
 
+  /* "Am I going to finish?" — answerable only once a session is running, and
+   * only worth saying once there is enough behind you to mean anything. */
+  function pacingLine() {
+    var p = pacing();
+    if (!p) return "";
+    if (p.done) return '<div class="pace pace--done">Everything is logged. Hit Finish.</div>';
+    if (p.behind < 120) return ""; // too early to say anything honest
+    var cap = state.settings.sessionCapMin || 0;
+    var over = cap && p.total > cap * 60;
+    var end = new Date(now() + p.remaining * 1000);
+    var clock =
+      String(end.getHours()).padStart(2, "0") + ":" + String(end.getMinutes()).padStart(2, "0");
+    return (
+      '<div class="pace' +
+      (over ? " pace--over" : "") +
+      '" id="pacing">~' +
+      Math.round(p.remaining / 60) +
+      " min left · finishing about " +
+      clock +
+      (p.pace >= 1.15
+        ? " · running " + Math.round((p.pace - 1) * 100) + "% slow"
+        : p.pace <= 0.85
+        ? " · " + Math.round((1 - p.pace) * 100) + "% ahead"
+        : "") +
+      (over
+        ? '<small>Over your ' +
+          cap +
+          " min. Cut a set or two now, while there is still something to cut.</small>"
+        : "") +
+      "</div>"
+    );
+  }
+
   /* The minus button turns into a remove button on a hand-added set that is
    * already at its floor, so the next tap visibly takes the set away. */
   function removeOrMinus(set, value, step, id, sets) {
@@ -1286,12 +1673,71 @@
     return (
       '<button class="step' +
       (willRemove || willSkip ? " step--remove" : "") +
-      '" data-act="rep-dec" title="' +
+      '" data-act="rep-dec" aria-label="' +
+      (willRemove ? "Remove this extra set" : willSkip ? "Skip this set" : "Decrease target") +
+      '" title="' +
       (willRemove ? "Remove this extra set" : willSkip ? "Skip this set" : "Less") +
       '">' +
       (willRemove || willSkip ? "✕" : "−") +
       "</button>"
     );
+  }
+
+  /* Station names describe a ring height, which is a lie anywhere without
+   * rings. The grouping still holds — it is the order you do things in. */
+  function stationLabel(stKey) {
+    var st = P.stations[stKey];
+    return (!adjustableHere() && st.plain) || st.label;
+  }
+
+  /* Does anything here get rigged, or is it all fixed in the ground? */
+  function adjustableHere() {
+    var c = caps();
+    return !!(c["hang-high-adjustable"] || c["dip-support-adjustable"]);
+  }
+
+  /* What this place is missing for a level you cannot reach here. */
+  function missingFor(ex, level) {
+    var c = caps();
+    var want = PR.rung(ex, level).needs.filter(function (cap) {
+      return !c[cap];
+    });
+    return want
+      .map(function (cap) {
+        /* Name it as the thing you would need, not as the capability. */
+        var provider = Object.keys(P.equipment).filter(function (t) {
+          return P.equipment[t].provides.indexOf(cap) >= 0;
+        })[0];
+        return (P.equipment[provider] && P.equipment[provider].label) || cap;
+      })
+      .join(" or ");
+  }
+
+  /* The session item a card belongs to, by the id on the card. */
+  function itemFor(id) {
+    return workoutItems(nextWorkoutKey()).filter(function (i) {
+      return i.id === id;
+    })[0];
+  }
+
+  /* The other exercises that would train this slot's pattern here.
+   *
+   * Offered against the SLOT's exercise, not the one currently showing: once
+   * you have swapped, the list has to keep including what you swapped away
+   * from, or the choice would be one-way. */
+  function variantsFor(it) {
+    var slot = it.slot || it.id;
+    var ex = P.exercises[slot];
+    if (!ex) return [];
+    /* Everything the program schedules SOMEWHERE, minus this slot's own
+     * exercise. Those are the week's deliberate choices, not spare parts. */
+    var taken = {};
+    Object.keys(P.workouts).forEach(function (k) {
+      P.workouts[k].order.forEach(function (o) {
+        if (o.id !== slot) taken[o.id] = true;
+      });
+    });
+    return PR.alternativesFor(ex, P.exercises, caps(), taken);
   }
 
   /* Sets already logged this session pin the level: finishSession records the
@@ -1362,7 +1808,7 @@
       );
     }
     return (
-      '<div class="rest-step" data-act="rest-now" data-rest="' +
+      '<button type="button" class="rest-step" data-act="rest-now" data-rest="' +
       seconds +
       '" data-restname="' +
       esc(it.ex.name) +
@@ -1372,7 +1818,7 @@
       next +
       '"><span class="rs-what">' +
       what +
-      "</span></div>"
+      "</span></button>"
     );
   }
 
@@ -1407,8 +1853,17 @@
       (isNow ? '<span class="tag tag-now">now</span> ' : "") +
       esc(ex.name) +
       (isPrep ? ' <span class="tag tag-prep">prep</span>' : "") +
+      /* The card is a SLOT, and the exercise is one way to fill it. Without
+       * this the name is all you see, and the name reads as the point — which
+       * it is not: "chin-ups" is what you are doing, "lats, biceps" is why. */
+      (P.trains[ex.pattern]
+        ? ' <span class="ex-trains">' + esc(P.trains[ex.pattern]) + "</span>"
+        : "") +
       (pair ? ' <span class="tag tag-ss">⇄ ' + esc(pair.partners) + "</span>" : "") +
       (t.offset ? ' <span class="tag tag-off">one level harder</span>' : "") +
+      (it.entry && it.entry.standsInFor
+        ? ' <span class="tag tag-sub">for ' + esc(P.exercises[it.entry.standsInFor].name) + "</span>"
+        : "") +
       "</div>" +
       '<button class="skip-btn" data-act="skip-exercise" title="' +
       (allSkipped ? "Put this exercise back" : "Not doing this exercise today") +
@@ -1417,7 +1872,12 @@
       '">' +
       (allSkipped ? "↺" : "⊘") +
       "</button>" +
-      '<button class="info-btn" data-act="toggle-info" aria-label="Details">ⓘ</button>' +
+      '<button class="info-btn" data-act="toggle-info" aria-label="' +
+      (expandedInfo[it.id] ? "Hide details for " : "Show details for ") +
+      esc(ex.name) +
+      '" aria-expanded="' +
+      (expandedInfo[it.id] ? "true" : "false") +
+      '" aria-controls="info-' + it.id + '">ⓘ</button>' +
       "</div>";
 
     h +=
@@ -1450,6 +1910,22 @@
     }
     /* The amber stripe down the card means nothing on its own — say why. */
     if (ex.caution) h += '<div class="ex-caution">⚠ ' + esc(ex.caution) + "</div>";
+    if (t.movedFrom !== null && t.movedFrom !== undefined) {
+      var down = t.level < t.movedFrom;
+      h +=
+        '<div class="ex-levelnote warn">' +
+        (down ? "Down to" : "Up to") +
+        " level " +
+        (t.level + 1) +
+        " here — no " +
+        esc(missingFor(ex, t.movedFrom)) +
+        (down ? "" : " for level " + (t.movedFrom + 1)) +
+        /* "at home" was true while places were modes. There is only a kit
+         * now, and the stored level is not attached to any of them. */
+        ". Your level is " +
+        (t.movedFrom + 1) +
+        ".</div>";
+    }
     /* A ladder that appears to stop is worse than one that says why. */
     if (t.nextGate) {
       h +=
@@ -1460,7 +1936,71 @@
         ". Earn it before then and it is banked.</div>";
     }
 
-    var kit = kitFor(t);
+    /* Which of the things you ticked to use, where more than one would do.
+     * With rings and a bar both to hand a chin-up can be done on either, and
+     * declaration order was quietly answering "rings" every time. */
+    gearChoices(t).forEach(function (g) {
+      h += '<div class="gear-row" id="gear-' + it.id + "-" + g.cap + '">';
+      h += '<span class="gear-label">' + esc(P.capLabels[g.cap] || g.cap) + "</span>";
+      g.options.forEach(function (token) {
+        var on = caps()[g.cap] === token;
+        h +=
+          '<button class="chip gear' +
+          (on ? " gear--on" : "") +
+          '" data-act="pick-gear" data-cap="' +
+          g.cap +
+          '" data-gear="' +
+          token +
+          '" aria-pressed="' +
+          (on ? "true" : "false") +
+          '">' +
+          esc(P.equipment[token].label) +
+          "</button>";
+      });
+      h += "</div>";
+    });
+
+    /* Which exercise trains this pattern today. Shown only where there is an
+     * actual choice, and only until a set is logged — the same pin as the level
+     * stepper, and for the same reason: swapping after logging would file those
+     * sets against an exercise they were not done on. */
+    var variants = variantsFor(it);
+    if (variants.length > 1) {
+      var locked = levelPinned(it.id);
+      h += '<div class="swap-row" id="swap-' + (it.slot || it.id) + '">';
+      variants.forEach(function (vid) {
+        h +=
+          '<button class="chip swap' +
+          (vid === it.id ? " swap--on" : "") +
+          (locked ? " is-static" : "") +
+          '" data-act="pick-variant" data-variant="' +
+          vid +
+          '"' +
+          ' aria-pressed="' +
+          (vid === it.id ? "true" : "false") +
+          '"' +
+          (locked ? " disabled" : "") +
+          ">" +
+          esc(P.exercises[vid].name) +
+          "</button>";
+      });
+      h += "</div>";
+      /* Keyed, because it APPEARS mid-card once you log. Without an id the
+       * patcher matches by position and rebuilds every node below it, which
+       * detaches the very set rows the tap handler is holding. */
+      if (locked)
+        h +=
+          '<div class="ex-levelnote" id="swaplock-' + (it.slot || it.id) +
+          '">Swap before you log a set — these are already done.</div>';
+    }
+
+    var asked = gearChoices(t).map(function (g) { return g.cap; });
+    var kit = kitFor(t, false, asked);
+    /* "no equipment" means the exercise needs none — NOT that everything it
+     * needs was already asked about above. Reading the filtered list alone said
+     * a hanging leg raise needed nothing, one line under a row offering a
+     * choice of two things to hang from. */
+    var bare = !(t.needs || []).length && !t.vest;
     h +=
       '<div class="ex-kit">' +
       (kit.length
@@ -1469,7 +2009,9 @@
               return '<span class="kit">' + esc(k) + "</span>";
             })
             .join("")
-        : '<span class="kit kit--none">no equipment</span>') +
+        : bare
+          ? '<span class="kit kit--none">no equipment</span>'
+          : "") +
       '<span class="kit kit--rest">rest ' + restFor(it.id) + " s</span>" +
       "</div>";
     if (t.vestSuppressed)
@@ -1482,11 +2024,11 @@
       h +=
         '<div class="vest-row">' +
         '<span class="vest-label">Vest</span>' +
-        '<button class="step" data-act="vest-dec">−</button>' +
+        '<button class="step" data-act="vest-dec" aria-label="Decrease vest load">−</button>' +
         '<span class="vest-val">' +
         trimNum(vest) +
         " kg</span>" +
-        '<button class="step" data-act="vest-inc">+</button>' +
+        '<button class="step" data-act="vest-inc" aria-label="Increase vest load">+</button>' +
         '<span class="vest-hint">applies to sets not yet logged — drop it between sets for descending sets</span>' +
         "</div>";
     }
@@ -1520,7 +2062,7 @@
       if (isSkipped(s)) {
         h +=
           '<span class="set-skipped">not doing this one</span>' +
-          '<button class="step" data-act="rep-inc" title="Put this set back">+</button>';
+          '<button class="step" data-act="rep-inc" aria-label="Put this set back" title="Put this set back">+</button>';
       } else if (s.done) {
         h +=
           '<span class="set-done">' +
@@ -1555,7 +2097,7 @@
           "<small>" +
           u +
           "</small></span>" +
-          '<button class="step" data-act="rep-inc">+</button>' +
+          '<button class="step" data-act="rep-inc" aria-label="Increase target">+</button>' +
           '<button class="btn btn-start' +
           (myTurn ? "" : " btn--waiting") +
           '" data-act="start-hold"' +
@@ -1567,7 +2109,7 @@
           sVal +
           ' s without running the clock"' +
           (myTurn ? "" : " disabled") +
-          ">✓</button>";
+          ' aria-label="Log set">✓</button>';
       } else {
         h +=
           removeOrMinus(s, sVal, t.step, it.id, t.sets) +
@@ -1576,12 +2118,12 @@
           "<small>" +
           u +
           "</small></span>" +
-          '<button class="step" data-act="rep-inc">+</button>' +
+          '<button class="step" data-act="rep-inc" aria-label="Increase target">+</button>' +
           '<button class="btn btn-done' +
           (myTurn ? "" : " btn--waiting") +
           '" data-act="log-set"' +
           (myTurn ? "" : " disabled") +
-          ">✓</button>";
+          ' aria-label="Log set">✓</button>';
       }
       h += "</div>";
 
@@ -1600,9 +2142,9 @@
       '<button class="linkbtn addset" data-act="add-set">+ extra set</button>' +
       "</div>";
 
-    h += '<div class="ex-info"' + (expandedInfo[it.id] ? "" : " hidden") + ">";
+    h += '<div class="ex-info" id="info-' + it.id + '"' + (expandedInfo[it.id] ? "" : " hidden") + ">";
     if (expandedInfo[it.id]) h += exerciseImage(it.id, ex, t.level);
-    h += videoLink(ex);
+    h += videoLink(ex, null, t);
     if (t.levelNote) h += '<p class="why"><strong>This level:</strong> ' + esc(t.levelNote) + "</p>";
     if (pair)
       h +=
@@ -1720,7 +2262,9 @@
     }
     h += "</div>";
 
-    h += '<div class="panel pad"><h2>Current standing</h2><div class="table-scroll"><table class="standing">';
+    h += renderCoverage();
+
+    h += '<div class="panel pad"><h2>Current standing</h2><div class="table-scroll" tabindex="0" role="region" aria-label="Current progression table"><table class="standing">';
     h +=
       "<thead><tr><th>Exercise</th><th>Level</th><th class=\"num\">Target</th><th class=\"num\">Load</th><th class=\"num\">Streak</th></tr></thead><tbody>";
     Object.keys(P.exercises).forEach(function (id) {
@@ -1809,6 +2353,99 @@
     return h;
   }
 
+  /* What the last seven days actually trained, by pattern.
+   *
+   * A total set count cannot show this. Two real sessions came out at 41 sets —
+   * a respectable-looking number — while every hip-dominant and every overhead
+   * set was missing, because the exercises that provide them sit at the end of
+   * workout B and fell off when the clock ran out. Split by pattern it is
+   * obvious at a glance; unsplit it is invisible. */
+  function renderCoverage() {
+    var since = new Date(now() - 7 * 86400000);
+    var sinceISO =
+      since.getFullYear() +
+      "-" +
+      String(since.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(since.getDate()).padStart(2, "0");
+    var rows = PR.coverage({
+      sessions: state.sessions,
+      exercises: P.exercises,
+      workouts: [P.workouts.A.order, P.workouts.B.order],
+      since: sinceISO,
+    });
+    var trained = rows.filter(function (r) {
+      return r.got > 0;
+    }).length;
+    if (!state.sessions.length) return "";
+
+    var gaps = rows.filter(function (r) {
+      return r.state === "missed";
+    });
+    var h =
+      '<div class="panel pad"><h2>Last 7 days</h2>' +
+      '<p class="muted small">Sets per movement pattern, against what one A and one B would give you. ' +
+      "A pattern nothing covers is invisible in a total.</p>";
+    if (gaps.length) {
+      h +=
+        '<p class="cov-gap">Barely trained: <strong>' +
+        gaps
+          .map(function (r) {
+            return esc(patternLabel(r.pattern));
+          })
+          .join("</strong>, <strong>") +
+        "</strong>.</p>";
+    } else if (trained) {
+      h += '<p class="cov-ok">Every pattern got work.</p>';
+    }
+    h += '<div class="cov">';
+    var lastGroup = "";
+    rows.forEach(function (r) {
+      if (r.group !== lastGroup) {
+        lastGroup = r.group;
+        h += '<div class="cov-group">' + esc(r.group) + "</div>";
+      }
+      var pct = Math.min(100, Math.round((r.got / r.planned) * 100));
+      h +=
+        '<div class="cov-row cov-row--' +
+        r.state +
+        '"><span class="cov-name">' +
+        esc(patternLabel(r.pattern)) +
+        '</span><span class="cov-bar"><span data-width="' +
+        pct +
+        '"></span></span><span class="cov-n">' +
+        r.got +
+        "/" +
+        r.planned +
+        "</span></div>";
+    });
+    h += "</div></div>";
+    return h;
+  }
+
+  /* The pattern id is for the code; this is for you. */
+  var PATTERN_LABEL = {
+    "prehab-warmup": "warm-up",
+    "prehab-hang": "hang",
+    "prehab-scap": "scapular",
+    "prehab-rear-delt": "rear delt",
+    "pull-vertical": "vertical pull",
+    "pull-horizontal": "horizontal pull",
+    "push-dip": "dip",
+    "push-vertical": "overhead push",
+    "push-horizontal": "horizontal push",
+    "legs-knee": "knee-dominant",
+    "legs-hip": "hip-dominant",
+    "legs-knee-flexion": "knee flexion",
+    "legs-calf": "calf",
+    "core-anti-extension": "anti-extension",
+    "core-hip-flexion": "hip flexion",
+  };
+
+  function patternLabel(p) {
+    return PATTERN_LABEL[p] || p;
+  }
+
   function stat(label, value) {
     return '<div class="stat"><div class="stat-v">' + esc(value) + '</div><div class="stat-l">' + esc(label) + "</div></div>";
   }
@@ -1820,6 +2457,10 @@
   function renderProgram() {
     var phase = currentPhase();
     var h = "";
+
+    h +=
+      '<div class="panel pad safety"><h2>Training safety</h2>' +
+      '<p>Stop for sharp or joint pain, numbness, dizziness, or loss of control. Regress the movement and seek qualified medical advice for an injury or symptoms that persist. This program is general information, not medical advice.</p></div>';
 
     h +=
       '<div class="panel pad"><h2>How progression works</h2>' +
@@ -1910,7 +2551,7 @@
           '<div class="pgm-station"><div class="pgm-st-head">' +
           P.stations[stKey].icon +
           " " +
-          esc(P.stations[stKey].label) +
+          esc(stationLabel(stKey)) +
           "</div>";
         inSt.forEach(function (o) {
           var ex = P.exercises[o.id];
@@ -1941,7 +2582,7 @@
         '<details class="ref"><summary><strong>' +
         esc(ex.name) +
         '</strong> <span class="muted">' +
-        esc(P.stations[ex.station].label) +
+        esc(stationLabel(ex.station)) +
         " · " +
         ex.sets +
         " × " +
@@ -1988,6 +2629,13 @@
           (w[1] ? '<p class="muted small">' + esc(w[1]) + "</p>" : "")
         );
       })() +
+      "</div>" +
+      '<div class="field"><span class="field-label">Offline illustrations</span>' +
+      '<p id="mediaCacheState" class="wake-state' + (mediaCacheBad ? " bad" : "") + '">' +
+      esc(mediaCacheState) + "</p>" +
+      (updateReady
+        ? '<p class="muted small">A new app version is ready. Use the reload prompt to switch versions.</p>'
+        : '<p class="muted small">Cached in a background task so every exercise picture remains available without a connection.</p>') +
       "</div>" +
       '<div class="field"><label class="field-label" for="optLead">Get-into-position countdown</label>' +
       '<select id="optLead">' +
@@ -2045,7 +2693,7 @@
         var vs = cues.voices();
         if (!vs.length) return "";
         return (
-          '<label class="field-label" for="optVoice" style="margin-top:12px">Voice</label>' +
+          '<label class="field-label field-label-spaced" for="optVoice">Voice</label>' +
           '<select id="optVoice">' +
           '<option value=""' + (state.settings.voiceName ? "" : " selected") + ">Automatic — best available</option>" +
           vs
@@ -2060,7 +2708,7 @@
           "</select>"
         );
       })() +
-      '<div class="btn-row" style="margin-top:10px"><button class="btn btn-sm" data-act="test-sound">Test</button>' +
+      '<div class="btn-row btn-row-spaced"><button class="btn btn-sm" data-act="test-sound">Test</button>' +
       '<span id="soundMsg" class="msg msg-inline" hidden></span></div>' +
       '<p class="muted small' +
       (cues.status() === "ready" ? '">' : ' bad">') +
@@ -2115,7 +2763,7 @@
       '<button class="btn" data-act="copy">Copy to clipboard</button>' +
       '<label class="btn btn-file">Import JSON<input type="file" id="importFile" accept="application/json,.json" hidden></label>' +
       "</div>" +
-      '<div id="dataMsg" class="msg" hidden></div>' +
+      '<div id="dataMsg" class="msg" role="status" aria-live="polite" hidden></div>' +
       "</div>";
 
     h +=
@@ -2140,8 +2788,10 @@
   function render() {
     try {
       draw();
+      return true;
     } catch (e) {
       fail("drawing the page", e);
+      return false;
     }
   }
 
@@ -2174,9 +2824,12 @@
       document.getElementById("view-" + t).hidden = t !== currentTab;
     });
     Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (b) {
-      b.setAttribute("aria-selected", b.dataset.tab === currentTab ? "true" : "false");
+      var selected = b.dataset.tab === currentTab;
+      b.setAttribute("aria-selected", selected ? "true" : "false");
+      b.setAttribute("tabindex", selected ? "0" : "-1");
     });
 
+    showStorageWarning();
     bindViewInputs();
     followAlong();
   }
@@ -2196,7 +2849,8 @@
     var el = document.querySelector('.ex-card[data-ex="' + id + '"]');
     if (el && el.scrollIntoView) {
       try {
-        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "nearest" });
       } catch (e) {
         el.scrollIntoView();
       }
@@ -2217,6 +2871,10 @@
   }
 
   function bindViewInputs() {
+    bindImageFallbacks();
+    Array.prototype.forEach.call(document.querySelectorAll(".cov-bar [data-width]"), function (bar) {
+      bar.style.width = bar.getAttribute("data-width") + "%";
+    });
     bindOnce("sessionNote", "input", function () {
       if (!state.active) return;
       state.active.note = document.getElementById("sessionNote").value;
@@ -2272,6 +2930,36 @@
     bindOnce("importFile", "change", doImport);
   }
 
+  /* Bind before assigning src. Inline onload/onerror handlers made a strict
+   * Content Security Policy impossible and were awkward to escape safely. The
+   * node may survive a patched render, so its handlers read mutable properties
+   * while each draw refreshes the candidate list. */
+  function bindImageFallbacks() {
+    Array.prototype.forEach.call(document.querySelectorAll(".ex-img"), function (img) {
+      if (!img.imageEventsBound) {
+        img.imageEventsBound = true;
+        img.addEventListener("load", function () {
+          if (img.parentNode) img.parentNode.style.display = "block";
+        });
+        img.addEventListener("error", function () {
+          if (img.imageFallbackIndex < img.imageFallbacks.length) {
+            img.setAttribute("src", img.imageFallbacks[img.imageFallbackIndex++]);
+          } else if (img.parentNode) {
+            img.parentNode.remove();
+          }
+        });
+      }
+      try {
+        img.imageFallbacks = JSON.parse(img.getAttribute("data-fallbacks") || "[]");
+      } catch (e) {
+        img.imageFallbacks = [];
+      }
+      img.imageFallbackIndex = 0;
+      var src = img.getAttribute("data-src");
+      if (src && img.getAttribute("src") !== src) img.setAttribute("src", src);
+    });
+  }
+
   /* ================================================================ */
   /* Events                                                            */
   /* ================================================================ */
@@ -2301,7 +2989,7 @@
           "Workout " +
             state.active.workout +
             ". " +
-            P.stations[sessionPlan(state.active.workout)[0].key].label +
+            stationLabel(sessionPlan(state.active.workout)[0].key) +
             (first ? ". " + announce(first.id, first.set) : "")
         );
         return;
@@ -2317,6 +3005,32 @@
           render();
         }
         return;
+      case "set-place": {
+        /* A preset REPLACES the ticks rather than adding to them: tapping Park
+         * has to drop the rings, or the session would still be planned around
+         * equipment you have just walked away from. */
+        state.settings.kit = (P.places[btn.dataset.place] || P.places.home).has.slice();
+        invalidatePlan();
+        /* A place change can cap a level or remove an exercise, so the running
+         * session's entries have to be rebuilt against what is here now. */
+        if (state.active) workoutItems(state.active.workout).forEach(ensureEntry);
+        save();
+        render();
+        return;
+      }
+      case "toggle-kit": {
+        var token = btn.dataset.kit;
+        var have = currentKit().slice();
+        var at = have.indexOf(token);
+        if (at >= 0) have.splice(at, 1);
+        else have.push(token);
+        state.settings.kit = have;
+        invalidatePlan();
+        if (state.active) workoutItems(state.active.workout).forEach(ensureEntry);
+        save();
+        render();
+        return;
+      }
       case "set-cap": {
         var cap = parseInt(btn.dataset.cap, 10) || 0;
         state.settings.sessionCapMin = cap;
@@ -2407,6 +3121,32 @@
         /* Floor at one step — a 0-rep set is otherwise never meant. Writing a
          * number here is what marks it as deliberately changed. */
         s.value = Math.max(step, cur + (act === "rep-inc" ? step : -step));
+        save();
+        render();
+        return;
+      }
+      case "pick-gear": {
+        var gear = state.settings.gear || (state.settings.gear = {});
+        gear[btn.dataset.cap] = btn.dataset.gear;
+        invalidatePlan();
+        if (state.active) workoutItems(state.active.workout).forEach(ensureEntry);
+        save();
+        render();
+        return;
+      }
+      case "pick-variant": {
+        var it = itemFor(exId);
+        if (!it) return;
+        var slot = it.slot || it.id;
+        if (levelPinned(it.id)) return;
+        var chosen = btn.dataset.variant;
+        var vs = state.settings.variant || (state.settings.variant = {});
+        /* Choosing what the workout already prescribes is not an override —
+         * storing it would freeze the slot against a later program change. */
+        if (chosen === slot) delete vs[slotKey(nextWorkoutKey(), slot)];
+        else vs[slotKey(nextWorkoutKey(), slot)] = chosen;
+        invalidatePlan();
+        if (state.active) workoutItems(state.active.workout).forEach(ensureEntry);
         save();
         render();
         return;
@@ -2600,12 +3340,40 @@
     }
   }));
 
+  document.addEventListener("keydown", guard("moving between tabs", function (e) {
+    var tab = e.target.closest && e.target.closest(".tab");
+    if (!tab) return;
+    var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+    var at = tabs.indexOf(tab), next = at;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (at + 1) % tabs.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (at - 1 + tabs.length) % tabs.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = tabs.length - 1;
+    else return;
+    if (e.preventDefault) e.preventDefault();
+    currentTab = tabs[next].dataset.tab;
+    render();
+    var selected = document.getElementById("tab-" + currentTab);
+    if (selected && selected.focus) selected.focus();
+  }));
+
   document.getElementById("crashReload").addEventListener("click", function () {
     location.reload();
   });
   document.getElementById("crashExport").addEventListener("click", function () {
     try {
       doExport();
+    } catch (e) {
+      fail("writing the backup", e);
+    }
+  });
+  document.getElementById("storageWarningExport").addEventListener("click", function () {
+    try {
+      if (rejectedPayload !== null) {
+        downloadText(rejectedPayload, "workout-rejected-" + todayISO() + ".txt", "text/plain");
+      } else {
+        doExport();
+      }
     } catch (e) {
       fail("writing the backup", e);
     }
@@ -2705,15 +3473,19 @@
   }
 
   function doExport() {
-    var blob = new Blob([payload()], { type: "application/json" });
+    downloadText(payload(), "workout-" + todayISO() + ".json", "application/json");
+    msg("Downloaded workout-" + todayISO() + ".json");
+  }
+
+  function downloadText(contents, filename, type) {
+    var blob = new Blob([contents], { type: type });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "workout-" + todayISO() + ".json";
+    a.download = filename;
     a.click();
     setTimeout(function () {
       URL.revokeObjectURL(a.href);
     }, 1000);
-    msg("Downloaded workout-" + todayISO() + ".json");
   }
 
   function doCopy() {
@@ -2734,13 +3506,16 @@
   function doImport(e) {
     var f = e.target.files && e.target.files[0];
     if (!f) return;
+    if (typeof f.size === "number" && f.size > MAX_IMPORT_BYTES) {
+      msg("Could not read that file: backup is larger than 5 MB.", true);
+      e.target.value = "";
+      return;
+    }
     var r = new FileReader();
     r.onload = function () {
       try {
         var incoming = JSON.parse(r.result);
-        if (!incoming || typeof incoming !== "object" || !Array.isArray(incoming.sessions)) {
-          throw new Error("not a workout export");
-        }
+        var prepared = prepareState(incoming, true);
         if (
           state.sessions.length &&
           !confirm(
@@ -2752,12 +3527,40 @@
           )
         )
           return;
-        localStorage.setItem(KEY, JSON.stringify(incoming));
-        state = load();
-        render();
+        var previous = state;
+        var previousMigrated = migrated;
+        var previousNotes = migrationNotes;
+        state = prepared.state;
+        migrated = prepared.migrated;
+        migrationNotes = prepared.notes;
+        if (!render()) {
+          state = previous;
+          migrated = previousMigrated;
+          migrationNotes = previousNotes;
+          document.getElementById("crash").hidden = true;
+          render();
+          throw new Error("the imported data could not be rendered");
+        }
+        try {
+          localStorage.setItem(KEY, JSON.stringify(state));
+          storageIssue = "";
+          rejectedPayload = null;
+          showStorageWarning();
+        } catch (writeError) {
+          state = previous;
+          migrated = previousMigrated;
+          migrationNotes = previousNotes;
+          storageIssue = "Browser storage is unavailable or full (" +
+            ((writeError && writeError.name) || "write failed") +
+            "). The imported data was not applied.";
+          render();
+          throw writeError;
+        }
         msg("Imported " + state.sessions.length + " session(s).");
       } catch (err) {
         msg("Could not read that file: " + err.message, true);
+      } finally {
+        e.target.value = "";
       }
     };
     r.readAsText(f);
@@ -2769,6 +3572,8 @@
     if (!el) {
       el = document.createElement("div");
       el.id = "toast";
+      el.setAttribute("role", "status");
+      el.setAttribute("aria-live", "polite");
       document.body.appendChild(el);
     }
     el.textContent = text;
@@ -2794,10 +3599,42 @@
   /* Needs http(s); silently absent on file://, which is fine — opening a local
    * file works offline by definition. */
   if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+    var hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("message", function (e) {
+      if (!e.data || e.data.type !== "MEDIA_CACHE_STATUS") return;
+      mediaCacheBad = e.data.failed > 0;
+      mediaCacheState = e.data.failed
+        ? e.data.ready + " of " + e.data.total + " illustrations cached; " + e.data.failed + " unavailable."
+        : "Ready — all " + e.data.total + " illustrations are cached.";
+      if (currentTab === "data") render();
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (hadController) {
+        updateReady = true;
+        var notice = document.getElementById("updateNotice");
+        if (notice) notice.hidden = false;
+        toast("An app update is ready.");
+      }
+      hadController = true;
+    });
     window.addEventListener("load", function () {
-      navigator.serviceWorker.register("sw.js").catch(function () {});
+      navigator.serviceWorker
+        .register("sw.js")
+        .then(function () { return navigator.serviceWorker.ready; })
+        .then(function (registration) {
+          var worker = navigator.serviceWorker.controller || registration.active;
+          if (worker) worker.postMessage({ type: "CACHE_MEDIA" });
+        })
+        .catch(function () {
+          mediaCacheBad = true;
+          mediaCacheState = "Offline cache setup failed; reload while connected to retry.";
+          if (currentTab === "data") render();
+        });
     });
   }
+
+  var updateReload = document.getElementById("updateReload");
+  if (updateReload) updateReload.addEventListener("click", function () { location.reload(); });
 
   /* Persist a migration straight away, so it settles instead of re-running —
    * and re-announcing itself — on every reload until something else saves.
