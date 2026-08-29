@@ -224,7 +224,9 @@ check('index links the manifest and an apple-touch-icon',
   [/rel="manifest"/.test(html), /rel="apple-touch-icon"/.test(html)], [true, true]);
 check('Nordic Utility tokens load before component styles',
   html.indexOf('href="tokens.css"') < html.indexOf('href="styles.css"'), true);
-check('the existing dark-only theme policy is explicit', /<html[^>]+data-theme="dark"/.test(html), true);
+check('theme bootstrap runs before token and component styles',
+  html.indexOf('src="theme.js"') < html.indexOf('href="tokens.css"'), true);
+check('System is the first-visit theme default', /<html[^>]+data-theme=/.test(html), false);
 check('the local token copy includes the canonical semantic roles',
   ['--color-bg', '--color-primary', '--color-success', '--color-warning', '--color-danger',
    '--radius-md', '--shadow-md', '--font-sans'].filter(role => !tokens.includes(role)), []);
@@ -234,6 +236,7 @@ check('the app has no inline event or style attributes',
   /\son(?:load|error)=/.test(html + readFileSync(join(root, 'app.js'), 'utf8')) ||
     /<[^>]+\sstyle=/.test(html + readFileSync(join(root, 'app.js'), 'utf8')), false);
 check('the apple-touch-icon file exists', existsSync(join(root, 'icons/icon-180.png')), true);
+check('the offline shell includes the theme bootstrap', sw.includes('"./theme.js"'), true);
 
 // Both generated lists are checked against disk. A manifest nobody regenerates
 // is worse than no manifest: data/images.js going stale hides a picture that is

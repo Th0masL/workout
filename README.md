@@ -17,7 +17,7 @@ appears around week 5, the 45 cm chair around week 7, and the vest around week 8
 Open [index.html](index.html) in a browser. That is it.
 
 On a phone, **add it to the home screen**: it is an installable web app, so it launches fullscreen
-with no browser chrome, its own icon and the dark theme carried into the status bar. The layout is
+with no browser chrome, its own icon and the active theme carried into the status bar. The layout is
 mobile-first and tap targets are 44 px.
 
 **Opening `index.html` directly from disk works**, but it is the weaker mode: `file://` has no
@@ -1158,7 +1158,8 @@ audio.js                      beeps, speech, and the rules about when they go ou
 data/program.js               exercises, ladders, cues, phases, workouts A/B
 data/images.js                GENERATED — which illustrations exist locally
 tokens.css                    local Nordic Utility semantic design tokens
-styles.css                    mobile-first dark theme
+theme.js                     early Light / System / Dark theme selection
+styles.css                    mobile-first Nordic Utility components
 tools/gen-images.mjs          regenerates data/images.js and sw.js MEDIA
 tests/progression.test.mjs    the rules are right — 213 assertions
 tests/ui.test.mjs             the app applies them — 281, through real clicks

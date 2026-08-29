@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const port = Number(process.env.WORKOUT_TEST_PORT || 43917);
+const baseURL = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: './tests/browser',
   fullyParallel: true,
@@ -7,7 +10,7 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   reporter: process.env.CI ? 'github' : 'line',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL,
     trace: 'retain-on-failure',
   },
   projects: [
@@ -22,8 +25,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'python3 -m http.server 4173 --bind 127.0.0.1',
-    url: 'http://127.0.0.1:4173',
+    command: `python3 -m http.server ${port} --bind 127.0.0.1`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 15_000,
   },

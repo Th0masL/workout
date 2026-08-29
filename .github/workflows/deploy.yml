@@ -45,7 +45,7 @@ jobs:
         run: |
           mkdir -p _site/data _site/icons _site/images
           cp index.html tokens.css styles.css manifest.json icon.svg _site/
-          cp app.js progression.js patch.js audio.js sw.js _site/
+          cp app.js theme.js progression.js patch.js audio.js sw.js _site/
           cp data/images.js data/program.js _site/data/
           cp icons/*.png _site/icons/
           cp images/*.gif images/*.svg _site/images/

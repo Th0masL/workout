@@ -1355,7 +1355,7 @@
     }
 
     html +=
-      '<div class="panel pad session-head" id="sessionHead">' +
+      '<div class="panel session-overview"><div class="pad session-head" id="sessionHead">' +
       '<div class="sh-left">' +
       '<div class="sh-kicker">' +
       (active ? "In progress" : "Up next") +
@@ -1406,6 +1406,8 @@
       "</div>" +
       "</div>";
 
+    html += '<div class="session-setup" role="group" aria-label="Session setup">';
+
     /* Where you are decides what the session can contain, so it sits with the
      * other two things you choose before starting rather than in Settings. */
     {
@@ -1433,7 +1435,7 @@
        * hiding it behind a mode meant the one screen that answers "why is
        * this exercise missing?" was the one you could not see. */
       var have = currentKit();
-      html += '<div class="kit-pick" id="kitPick">';
+      html += '<div class="kit-pick" id="kitPick"><span class="cap-label">Equipment</span>';
       Object.keys(P.equipment).forEach(function (token) {
         html +=
           '<button class="chip kit-tick' +
@@ -1510,6 +1512,8 @@
         '<p class="hint" id="startHint">Tap <strong>Start</strong>, or just log a set — the session starts either way. ' +
         "Close the tab mid-workout and it picks up where you left off.</p>";
     }
+
+    html += "</div></div>";
 
     var groups = sessionPlan(key);
     var here = currentPosition();
@@ -2616,8 +2620,20 @@
 
   function renderData() {
     var h = "";
+    var themeChoice = window.WorkoutTheme ? window.WorkoutTheme.getChoice() : "system";
     h +=
       '<div class="panel pad"><h2>Settings</h2>' +
+      '<div class="field"><label class="field-label" for="optTheme">Appearance</label>' +
+      '<select id="optTheme" data-theme-control>' +
+      [
+        ["light", "Light"],
+        ["system", "System"],
+        ["dark", "Dark"],
+      ].map(function (option) {
+        return '<option value="' + option[0] + '"' +
+          (themeChoice === option[0] ? " selected" : "") + '>' + option[1] + '</option>';
+      }).join("") +
+      '</select><p class="muted small">System follows this device and updates when its appearance changes.</p></div>' +
       '<label class="toggle"><input type="checkbox" id="optRest"' +
       (state.settings.restTimer ? " checked" : "") +
       '> <span>Rest timer <span class="muted">— counts down and beeps after each logged set</span></span></label>' +

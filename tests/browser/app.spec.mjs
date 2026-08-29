@@ -27,6 +27,33 @@ test('tabs work from the keyboard', async ({ page }) => {
   await expect(page.getByRole('tabpanel', { name: 'History' })).toBeVisible();
 });
 
+test('theme choices persist and update the browser theme color', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Data' }).click();
+  const theme = page.getByLabel('Appearance');
+  await expect(theme).toHaveValue('system');
+
+  await theme.selectOption('dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#0f1320');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  await page.getByRole('tab', { name: 'Data' }).click();
+  await page.getByLabel('Appearance').selectOption('light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f6f8fb');
+});
+
+test('System follows operating-system theme changes', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.reload();
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.+/);
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#0f1320');
+
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f6f8fb');
+});
+
 for (const tab of ['Today', 'History', 'Program', 'Data']) {
   test(`${tab} has no automated accessibility violations`, async ({ page }) => {
     if (tab !== 'Today') await page.getByRole('tab', { name: tab }).click();

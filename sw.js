@@ -8,7 +8,7 @@
  * Your training data is not here: that lives in localStorage, which the cache
  * never touches. Clearing this cache only forces a re-download of the app.
  */
-var VERSION = "v5";
+var VERSION = "v6";
 var CACHE_PREFIX = "workout-program-";
 var CACHE = CACHE_PREFIX + VERSION;
 
@@ -47,6 +47,7 @@ var MEDIA = [
 var SHELL = [
   "./",
   "./index.html",
+  "./theme.js",
   "./app.js",
   "./progression.js",
   "./patch.js",
