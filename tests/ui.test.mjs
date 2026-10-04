@@ -2183,4 +2183,24 @@ tab(importer, 'today');
 check('and the imported state renders normally', /Workout B/.test($(importer, '#sessionHead').textContent), true);
 
 // ---------------------------------------------------------------- //
+section('Conflicting tabs and active-workout imports');
+const stale = boot();
+const otherTabPayload = JSON.stringify({ version: 4, sessions: [], active: null, nextOverride: 'B' });
+stale.localStorage.setItem(KEY, otherTabPayload);
+$(stale, '[data-act="start"]').click();
+check('a stale tab cannot overwrite newer workout data', stale.localStorage.getItem(KEY), otherTabPayload);
+check('a stale tab explains how to recover', $(stale, '#storageWarningWhat').textContent.includes('another tab'), true);
+
+const activeImporter = boot();
+$(activeImporter, '.ex-card[data-ex="ring-pullup"] [data-act="log-set"]').click();
+tab(activeImporter, 'data');
+const beforeImport = activeImporter.localStorage.getItem(KEY);
+let importPrompts = 0;
+activeImporter.confirm = () => { importPrompts++; return false; };
+const activeInput = $(activeImporter, '#importFile');
+activeInput.files = [{ text: JSON.stringify({ version: 4, sessions: [], active: null }) }];
+activeInput.change();
+check('replacing a first active workout requires confirmation', importPrompts, 1);
+check('declining import preserves logged sets', activeImporter.localStorage.getItem(KEY), beforeImport);
+
 report();
