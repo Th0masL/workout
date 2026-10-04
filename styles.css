@@ -420,10 +420,26 @@ select:focus { border-color: var(--color-primary); outline: 3px solid color-mix(
 .update-notice .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* ---------- Rest bar ---------- */
+.workout-dock {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: var(--color-surface-raised);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.next-up {
+  display: flex; align-items: center; gap: var(--space-3);
+  max-width: 780px; margin: auto; padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+.next-up-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.next-up-copy strong, .next-up-copy small { display: block; }
+.next-up-copy small { color: var(--color-text-muted); }
+.next-up .btn { flex: none; }
+body.has-next-up { padding-bottom: calc(210px + env(safe-area-inset-bottom)); }
+body.has-next-up .set-row { scroll-margin-top: 150px; scroll-margin-bottom: 220px; }
 .rest-bar {
-  position: fixed;
+  position: relative;
   left: 0; right: 0;
-  bottom: env(safe-area-inset-bottom);
+  bottom: auto;
   z-index: 30;
   display: flex; align-items: center; gap: 12px;
   padding: 10px 16px;

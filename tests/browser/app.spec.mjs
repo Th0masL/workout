@@ -27,6 +27,36 @@ test('tabs work from the keyboard', async ({ page }) => {
   await expect(page.getByRole('tabpanel', { name: 'History' })).toBeVisible();
 });
 
+test('next-up dock follows sets and returns to the workout from another tab', async ({ page }) => {
+  const dock = page.locator('#nextUp');
+  await expect(dock).toBeHidden();
+  await page.locator('.ex-card[data-ex="ring-pullup"] [data-act="log-set"]').first().click();
+  await expect(dock).toBeVisible();
+  await expect(dock).toContainText('Pull-ups');
+  await expect(dock).toContainText('Set 2 of 3');
+  await expect(page.locator('#restBar')).toBeVisible();
+  const restBox = await page.locator('#restBar').boundingBox();
+  const dockBox = await dock.boundingBox();
+  expect(dockBox.y + dockBox.height).toBeLessThanOrEqual(restBox.y + 1);
+  await page.getByRole('tab', { name: 'History' }).click();
+  await dock.getByRole('button', { name: 'Go to set' }).click();
+  await expect(page.getByRole('tab', { name: 'Today' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.ex-card[data-ex="ring-pullup"] .set-row').nth(1)).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('an older tab cannot erase a workout saved in another tab', async ({ page, context }) => {
+  const older = await context.newPage();
+  await older.goto('/');
+  await page.locator('.ex-card[data-ex="ring-pullup"] [data-act="log-set"]').first().click();
+  const saved = await page.evaluate(() => localStorage.getItem('workout-program:v1'));
+  await older.getByRole('button', { name: 'B', exact: true }).click();
+  await expect(older.locator('#storageWarning')).toBeVisible();
+  expect(await older.evaluate(() => localStorage.getItem('workout-program:v1'))).toBe(saved);
+  await older.reload();
+  await expect(older.locator('.ex-card[data-ex="ring-pullup"] .set-row').first()).toHaveClass(/set-row--done/);
+});
+
 test('theme choices persist and update the browser theme color', async ({ page }) => {
   await page.getByRole('tab', { name: 'Data' }).click();
   const theme = page.getByLabel('Appearance');

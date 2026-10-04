@@ -159,6 +159,9 @@ function revalidating(req) {
  * keeps running and refreshes the cache if the connection eventually answers. */
 function networkWithTimeout(req) {
   var network = fetch(revalidating(req)).then(function (res) {
+    if (res && res.status >= 500) {
+      return caches.match(req).then(function (cached) { return cached || res; });
+    }
     if (res && res.ok) {
       var copy = res.clone();
       caches.open(CACHE).then(function (c) {

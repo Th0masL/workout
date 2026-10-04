@@ -55,6 +55,7 @@
    * initialiser runs second and wipes what load() just put there. */
   var migrationNotes = [];
   var migrated = false;
+  var storedSnapshot = null;
   var state = load();
 
   function clone(v) {
@@ -169,6 +170,7 @@
     var raw = null, prepared, storedText = null;
     try {
       storedText = localStorage.getItem(KEY);
+      storedSnapshot = storedText;
       raw = JSON.parse(storedText || "null");
     } catch (e) {
       storageIssue = "Stored workout data is not valid JSON. A fresh in-memory state was opened.";
@@ -189,10 +191,25 @@
     return prepared.state;
   }
 
+  function storageIsCurrent() {
+    try {
+      if (localStorage.getItem(KEY) === storedSnapshot) return true;
+    } catch (e) {
+      // Keep the in-memory recovery workflow available when storage is blocked.
+      return true;
+    }
+    storageIssue = "Workout data changed in another tab. Reload before making more changes. Download recovery data first if this tab has unsaved work.";
+    showStorageWarning();
+    return false;
+  }
+
   function save() {
     invalidatePlan();
     try {
-      localStorage.setItem(KEY, JSON.stringify(state));
+      if (!storageIsCurrent()) return false;
+      var text = JSON.stringify(state);
+      localStorage.setItem(KEY, text);
+      storedSnapshot = text;
       storageIssue = "";
       rejectedPayload = null;
       showStorageWarning();
@@ -248,6 +265,7 @@
   function guard(where, fn) {
     return function () {
       try {
+        if (!storageIsCurrent()) return;
         return fn.apply(this, arguments);
       } catch (e) {
         fail(where, e);
@@ -2845,6 +2863,7 @@
       b.setAttribute("tabindex", selected ? "0" : "-1");
     });
 
+    renderNextUp();
     showStorageWarning();
     bindViewInputs();
     followAlong();
@@ -2854,6 +2873,34 @@
    * on every logged set would yank the page around under your thumb. `nearest`
    * leaves it alone when it is already on screen. */
   var followingId = null;
+  function renderNextUp() {
+    var bar = document.getElementById("nextUp");
+    bar.hidden = !state.active;
+    if (!state.active) {
+      document.body.classList.remove("has-next-up");
+      return;
+    }
+    document.body.classList.add("has-next-up");
+    var here = currentPosition();
+    if (!here) {
+      DP.patch(bar, '<div class="next-up-copy"><strong>All sets complete</strong><small>Finish to save your session.</small></div><button class="btn btn-primary" data-act="finish">Finish</button>');
+      return;
+    }
+    var target = targetFor(here.id);
+    var entry = state.active.entries[here.id];
+    var set = entry && entry.sets[here.set];
+    var count = entry ? entry.sets.filter(function (s) { return !isSkipped(s); }).length : target.sets;
+    var number = entry ? entry.sets.slice(0, here.set + 1).filter(function (s) { return !isSkipped(s); }).length : here.set + 1;
+    var value = set ? setValue(set, target) : target.value;
+    var load = set ? setLoad(set, here.id, target) : target.vest;
+    DP.patch(bar, '<div class="next-up-copy" role="status"><small>' +
+      (activeHold() ? "Current set" : "Next up") + '</small><strong>' + esc(P.exercises[here.id].name) +
+      '</strong><small>Set ' + number + ' of ' + count + ' · ' + esc(value) +
+      (target.metric === "seconds" ? ' s' : ' reps') + (target.perSide ? ' per side' : '') +
+      (load ? ' · ' + esc(fmtLoad(load)) : '') +
+      '</small></div><button class="btn" data-act="go-to-set">Go to set</button>');
+  }
+
   function followAlong() {
     if (currentTab !== "today") return;
     var here = currentPosition();
@@ -2997,6 +3044,20 @@
     var setIdx = setRow ? parseInt(setRow.dataset.set, 10) : -1;
 
     switch (act) {
+      case "go-to-set": {
+        currentTab = "today";
+        render();
+        var next = currentPosition();
+        if (!next) return;
+        var nextCard = document.querySelector('.ex-card[data-ex="' + next.id + '"]');
+        var row = nextCard && nextCard.querySelectorAll('.set-row')[next.set];
+        if (row) {
+          row.setAttribute("tabindex", "-1");
+          if (row.focus) row.focus({ preventScroll: true });
+          if (row.scrollIntoView) row.scrollIntoView({ block: "center", behavior: "auto" });
+        }
+        return;
+      }
       case "start":
         cues.prime();
         startSession();
@@ -3348,6 +3409,7 @@
         return;
       case "reset-all":
         if (confirm("Erase all sessions, settings and progression. This cannot be undone.")) {
+          if (!storageIsCurrent()) return;
           localStorage.removeItem(KEY);
           state = load();
           render();
@@ -3532,10 +3594,11 @@
       try {
         var incoming = JSON.parse(r.result);
         var prepared = prepareState(incoming, true);
+        if (!storageIsCurrent()) return;
         if (
-          state.sessions.length &&
+          (state.sessions.length || state.active || storedSnapshot !== null) &&
           !confirm(
-            "Replace " +
+            "Replace all local workout data, including any active workout and settings? Replace " +
               state.sessions.length +
               " local session(s) with " +
               incoming.sessions.length +
@@ -3558,7 +3621,10 @@
           throw new Error("the imported data could not be rendered");
         }
         try {
-          localStorage.setItem(KEY, JSON.stringify(state));
+          if (!storageIsCurrent()) throw new Error("Workout data changed in another tab; reload before importing.");
+          var importedText = JSON.stringify(state);
+          localStorage.setItem(KEY, importedText);
+          storedSnapshot = importedText;
           storageIssue = "";
           rejectedPayload = null;
           showStorageWarning();
